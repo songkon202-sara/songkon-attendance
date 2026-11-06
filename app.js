@@ -9,7 +9,7 @@
   // ---------------------------------------------------------------- helpers
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const METHOD = { face: 'ใบหน้า', finger: 'ลายนิ้วมือ', password: 'รหัส', card: 'บัตร', other: 'อื่น ๆ', mobile: 'มือถือ' };
-  const TYPE = { civil: 'ข้าราชการ', seconded: 'ยืมตัวมาช่วยราชการ', other: 'ลูกจ้าง/อื่น ๆ' };
+  const TYPE = { civil: 'ข้าราชการ', moph_employee: 'พนักงานกระทรวงสาธารณสุข', temp: 'ลูกจ้างชั่วคราว', seconded: 'ยืมตัวมาช่วยราชการ', other: 'อื่น ๆ' };
   const LEAVE = { leave: 'ลา', official: 'ไปราชการ', other: 'อื่น ๆ' };
   const hhmm = (t) => (t ? String(t).slice(0, 5) : '');
   const todayISO = () => new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
