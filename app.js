@@ -39,13 +39,14 @@
   const ROUTES = {
     sheet: { title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
     staff: { title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
+    monthly: { title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
     leave: { title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
     settings: { title: 'ตั้งค่า', admin: true, render: viewSettings },
     me: { title: 'เวลาของฉัน', admin: false, render: viewMe }
   };
 
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'staff', 'leave', 'settings', 'me'] : ['me'];
+    const keys = isAdmin() ? ['sheet', 'monthly', 'staff', 'leave', 'settings', 'me'] : ['me'];
     document.getElementById('nav').innerHTML = keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
   }
@@ -389,6 +390,82 @@
       try { const n = await q(sb.rpc('hip_rematch')); toast(`ย้ายรายการค้าง ${n} รายการ`); route(); }
       catch (e) { fail(e); busy(rm, false); }
     };
+  }
+
+  // ---------------------------------------------------------------- สรุปรายเดือน
+  async function viewMonthly() {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const month = params.get('m') || todayISO().slice(0, 7);
+    const first = month + '-01';
+    const rows = await q(sb.rpc('monthly_summary', { p_month: first }));
+    const wd = rows[0] ? rows[0].workdays : 0;
+    const monthTH = new Date(first + 'T00:00:00+07:00').toLocaleDateString('th-TH', { month: 'long', year: 'numeric', timeZone: 'Asia/Bangkok' });
+    const tot = rows.reduce((a, r) => ({ late: a.late + r.late, leave: a.leave + r.leave, absent: a.absent + r.absent, official: a.official + r.official }), { late: 0, leave: 0, absent: 0, official: 0 });
+    setView(`
+      <div class="head"><div><h1>สรุปรายเดือน</h1><p class="muted">${monthTH} · วันทำการ ${wd} วัน (นับถึงวันนี้ ไม่รวมวันหยุด)</p></div>
+        <div class="row">
+          <label class="f">เดือน<input type="month" id="month" value="${month}"></label>
+          <button class="btn" type="button" id="xlsx">ดาวน์โหลด Excel</button>
+        </div>
+      </div>
+      <div class="tiles">
+        <div class="tile late"><b>${tot.late}</b><span>ครั้งที่มาสาย</span></div>
+        <div class="tile away"><b>${tot.official}</b><span>วันไปราชการ</span></div>
+        <div class="tile"><b>${tot.leave}</b><span>วันลา</span></div>
+        <div class="tile"><b>${tot.absent}</b><span>วันไม่ได้ลงเวลา</span></div>
+      </div>
+      <div class="panel tbl-wrap">
+        <table class="data">
+          <thead><tr><th>ลำดับ</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th style="text-align:right">มา</th><th style="text-align:right">สาย</th><th style="text-align:right">สายรวม (นาที)</th><th style="text-align:right">ไปราชการ</th><th style="text-align:right">ลา</th><th style="text-align:right">ไม่ได้ลงเวลา</th><th style="text-align:right">ไม่สแกนกลับ</th><th style="text-align:right">นอกพื้นที่</th></tr></thead>
+          <tbody>${rows.map((r, i) => `<tr>
+            <td>${i + 1}</td><td><b>${esc(r.full_name)}</b></td><td>${esc(r.staff_position || '')}</td>
+            <td style="text-align:right">${r.present}</td>
+            <td style="text-align:right">${r.late ? `<span class="tag late">${r.late}</span>` : 0}</td>
+            <td style="text-align:right">${r.late_minutes}</td>
+            <td style="text-align:right">${r.official}</td><td style="text-align:right">${r.leave}</td>
+            <td style="text-align:right">${r.absent}</td><td style="text-align:right">${r.no_out}</td><td style="text-align:right">${r.away}</td>
+          </tr>`).join('') || '<tr><td colspan="11" class="muted">ไม่มีข้อมูลในเดือนนี้</td></tr>'}</tbody>
+        </table>
+      </div>
+      <p class="muted" style="font-size:14px">"ไม่ได้ลงเวลา" คือวันทำการที่ไม่มีการสแกนและไม่ได้บันทึกลาหรือไปราชการไว้ ถ้ามีวันลาที่ยังไม่ได้บันทึก ให้เพิ่มในเมนู "ลา / ไปราชการ"</p>`);
+
+    document.getElementById('month').onchange = (e) => { if (e.target.value) location.hash = '#/monthly?m=' + e.target.value; };
+    document.getElementById('xlsx').onclick = async (ev) => {
+      const b = ev.target; busy(b, true);
+      try {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+        const detail = await q(sb.rpc('monthly_detail', { p_month: first }));
+        const sum = rows.map((r, i) => ({
+          'ลำดับ': i + 1, 'ชื่อ-สกุล': r.full_name, 'ตำแหน่ง': r.staff_position || '', 'ประเภท': TYPE[r.staff_type] || '',
+          'วันทำการ': r.workdays, 'มา': r.present, 'สาย (ครั้ง)': r.late, 'สายรวม (นาที)': r.late_minutes,
+          'ไปราชการ': r.official, 'ลา': r.leave, 'ไม่ได้ลงเวลา': r.absent, 'ไม่สแกนกลับ': r.no_out, 'นอกพื้นที่': r.away
+        }));
+        const det = detail.map((d) => ({
+          'วันที่': thaiDate(d.day, { weekday: 'short' }), 'ชื่อ-สกุล': d.full_name,
+          'เวลามา': hhmm(d.time_in), 'ช่องทาง (มา)': METHOD[d.method_in] || '',
+          'เวลากลับ': hhmm(d.time_out), 'ช่องทาง (กลับ)': METHOD[d.method_out] || '',
+          'สาย': d.is_late ? 'สาย' : '', 'สถานะ': { present: 'มา', official: 'ไปราชการ', absent: 'ไม่มา/ลา' }[d.status] || d.status,
+          'หมายเหตุ': d.remark || ''
+        }));
+        const wb = XLSX.utils.book_new();
+        const ws1 = XLSX.utils.json_to_sheet(sum); ws1['!cols'] = [{ wch: 6 }, { wch: 28 }, { wch: 24 }, { wch: 20 }].concat(Array(9).fill({ wch: 12 }));
+        const ws2 = XLSX.utils.json_to_sheet(det); ws2['!cols'] = [{ wch: 18 }, { wch: 28 }, { wch: 9 }, { wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 6 }, { wch: 12 }, { wch: 36 }];
+        XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายเดือน');
+        XLSX.utils.book_append_sheet(wb, ws2, 'รายวัน');
+        XLSX.writeFile(wb, `songkon-attendance-${month}.xlsx`);
+        toast('ดาวน์โหลด Excel แล้ว');
+      } catch (e) { fail(e); } finally { busy(b, false); }
+    };
+  }
+
+  function loadScript(src) {
+    if (loadScript.done && loadScript.done[src]) return Promise.resolve();
+    return new Promise((res, rej) => {
+      const el = document.createElement('script'); el.src = src;
+      el.onload = () => { (loadScript.done = loadScript.done || {})[src] = true; res(); };
+      el.onerror = () => rej(new Error('โหลดไลบรารี Excel ไม่สำเร็จ ตรวจการเชื่อมต่ออินเทอร์เน็ต'));
+      document.head.appendChild(el);
+    });
   }
 
   // ---------------------------------------------------------------- ลา / ไปราชการ
