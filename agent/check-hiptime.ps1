@@ -1,4 +1,4 @@
-# ตรวจโครงสร้างฐานข้อมูล HIP Time แบบอ่านอย่างเดียว (ไม่แก้ไขข้อมูลใด ๆ)
+﻿# ตรวจโครงสร้างฐานข้อมูล HIP Time แบบอ่านอย่างเดียว (ไม่แก้ไขข้อมูลใด ๆ)
 # วิธีรัน: เปิด PowerShell แล้วพิมพ์
 #   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\check-hiptime.ps1"
 # ผลลัพธ์จะบันทึกที่ Downloads\hiptime-check.txt (ไม่มีชื่อเจ้าหน้าที่ และไม่มีรหัสผ่าน)
