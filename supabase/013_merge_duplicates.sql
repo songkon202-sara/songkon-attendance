@@ -1,10 +1,10 @@
 -- =====================================================================
--- 013 — รวมรายชื่อซ้ำ + ใช้รหัสให้ตรงกับเครื่องสแกน
+-- 013 — รวมรายชื่อซ้ำ + ยึดรหัสพนักงาน 01–10 (รายชื่อที่ข้อมูลครบ)
 --   • ชื่อเดียวกันมี 2 แถว → เก็บแถวที่ข้อมูลครบ (มีตำแหน่ง/ผูกบัญชี/ลำดับต้น)
 --     ย้ายประวัติสแกน วันลา ใบหน้า มาไว้ที่แถวนั้น แล้วลบแถวซ้ำ
---   • รหัสพนักงาน (01–10 ที่ตั้งไว้) เก็บไว้ในช่องใหม่ emp_code — แสดงในหน้าเว็บเหมือนเดิม
---   • ช่องเลขในเครื่องสแกน (hip_user_id) = เลขที่ใช้จริงในเครื่อง ระบบใช้จับคู่เวลาให้อัตโนมัติ
---   • ย้ายรายการสแกนที่ค้าง (ยังไม่รู้ว่าเป็นใคร) เข้าคนที่จับคู่ได้
+--   • รหัสพนักงาน 01–10 เก็บในช่อง emp_code (แสดงในหน้าเว็บ)
+--   • เลขในเครื่องสแกน = รหัสพนักงานแบบไม่มีเลข 0 นำหน้า (01 → 1, 10 → 10)
+--     ใช้คู่กับการลบผู้ใช้ในเครื่องสแกน แล้วลงทะเบียนใหม่ด้วยเลขชุดนี้
 --
 -- วิธีใช้ใน Supabase SQL Editor (รันไฟล์นี้ก่อน 1 ครั้ง)
 --   ดูก่อน (ยังไม่แก้อะไร):  select * from songkon_merge(false);
@@ -28,7 +28,7 @@ returns table (ชื่อ text, ตำแหน่ง text, รหัสพน
 language plpgsql security definer set search_path = public as $$
 declare
   k record; d record;
-  new_code text; n_dup int; n_logs int; n_tmp int; note text;
+  new_code text; emp text; n_dup int; n_logs int; n_tmp int; note text;
 begin
   for k in
     select distinct on (norm_name(s.full_name)) s.*
@@ -38,20 +38,10 @@ begin
   loop
     n_dup := 0; n_logs := 0; note := null;
 
-    -- 1) รหัสจริงในเครื่อง: จากแถวซ้ำ → จากชื่อในเครื่อง → รหัสเดิม (ถ้ามีในเครื่อง)
-    select s.hip_user_id into new_code from staff s
-      join hip_people h on h.enroll_number = s.hip_user_id
-      where s.is_active and s.id <> k.id and norm_name(s.full_name) = norm_name(k.full_name)
-      limit 1;
-    if new_code is null then
-      select h.enroll_number into new_code from hip_people h
-        where norm_name(h.name) = norm_name(k.full_name)
-          and (select count(*) from hip_people h2 where norm_name(h2.name) = norm_name(k.full_name)) = 1;
-    end if;
-    if new_code is null and exists (select 1 from hip_people where enroll_number = k.hip_user_id) then
-      new_code := k.hip_user_id;
-    end if;
-    if new_code is null then note := 'ไม่พบชื่อนี้ในเครื่องสแกน — ใส่เลขเองภายหลัง'; end if;
+    -- 1) รหัสพนักงาน = รหัสที่ตั้งไว้ในแถวที่ข้อมูลครบ, เลขในเครื่อง = ตัดเลข 0 นำหน้า
+    emp := case when k.position is not null then coalesce(k.emp_code, k.hip_user_id) else k.emp_code end;
+    new_code := case when emp is not null then nullif(regexp_replace(emp, '^0+', ''), '') else k.hip_user_id end;
+    if new_code is null then note := 'ยังไม่มีรหัส — ใส่เองในหน้าเจ้าหน้าที่'; end if;
 
     -- 2) แถวซ้ำ
     for d in select s.* from staff s
@@ -77,9 +67,9 @@ begin
     end loop;
 
     -- 3) เก็บรหัสที่ตั้งไว้ (01–10) เป็นรหัสพนักงาน แล้วตั้งเลขในเครื่องสแกน (ปลดเลขนี้จากคนอื่นก่อน)
-    if p_apply and k.emp_code is null and k.hip_user_id is not null
-       and not exists (select 1 from hip_people where enroll_number = k.hip_user_id) then
-      update staff set emp_code = k.hip_user_id where id = k.id;
+    if p_apply and emp is not null and k.emp_code is distinct from emp then
+      update staff set emp_code = null where emp_code = emp and id <> k.id;
+      update staff set emp_code = emp where id = k.id;
     end if;
     if p_apply and coalesce(new_code, '') is distinct from coalesce(k.hip_user_id, '') then
       update staff set hip_user_id = null where hip_user_id = new_code and id <> k.id;
@@ -87,23 +77,12 @@ begin
     end if;
 
     ชื่อ := k.full_name; ตำแหน่ง := k.position;
-    รหัสพนักงาน := coalesce(k.emp_code, case when not exists (select 1 from hip_people where enroll_number = k.hip_user_id) then k.hip_user_id end);
+    รหัสพนักงาน := emp;
     เลขในเครื่องสแกน := new_code;
     แถวซ้ำที่ลบ := n_dup; สแกนที่ย้าย := n_logs; หมายเหตุ := note;
     return next;
   end loop;
 
-  -- 4) ย้ายรายการสแกนที่ค้างเข้าคนที่มีรหัสแล้ว
-  if p_apply then
-    with moved as (
-      delete from hip_unmatched u using staff s
-      where s.hip_user_id = u.enroll_number and s.is_active
-      returning u.*, s.id as sid
-    )
-    insert into attendance_logs (staff_id, log_time, method, hip_scan_id, hip_verify)
-    select sid, log_time, hip_method(null, split_part(hip_verify, ':', 2)), hip_scan_id, hip_verify
-    from moved on conflict do nothing;
-  end if;
 end $$;
 
 -- รันได้เฉพาะจาก SQL Editor (เจ้าของฐานข้อมูล) — หน้าเว็บเรียกไม่ได้
