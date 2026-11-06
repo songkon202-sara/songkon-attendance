@@ -471,6 +471,13 @@
           ${field('site_lng', 'ลองจิจูด', 'number', 'step="0.000001"')}
           ${field('radius_m', 'รัศมี (เมตร)', 'number', 'min="20" max="5000"')}
         </div>
+        <h2 style="margin-top:20px">แจ้งเตือน Telegram</h2>
+        <label class="check"><input type="checkbox" name="telegram_notify" ${s.telegram_notify ? 'checked' : ''}> เปิดการแจ้งเตือน (ลงเวลาใหม่ทุก 15 นาที · มาสาย · สรุปรายวัน)</label>
+        <div class="grid2">
+          ${field('telegram_chat_id', 'Chat ID ของกลุ่ม (ขึ้นต้น -100)', 'text')}
+          ${field('telegram_topic_id', 'เลขหัวข้อ (Topic)', 'text')}
+        </div>
+        <button class="btn quiet" type="button" id="tg-test" style="margin-top:10px">ทดสอบส่งข้อความ</button>
         <h2 style="margin-top:20px">รายการตำแหน่ง</h2>
         <label class="f">หนึ่งบรรทัดต่อหนึ่งตำแหน่ง (ใช้ในช่องเลือกตำแหน่งของหน้าเจ้าหน้าที่)
           <textarea name="positions" rows="8">${esc((s.positions || []).join('\n'))}</textarea></label>
@@ -489,11 +496,19 @@
         work_start: f.work_start.value, late_grace_min: Number(f.late_grace_min.value),
         work_end: f.work_end.value, vacancies: Number(f.vacancies.value),
         site_lat: Number(f.site_lat.value), site_lng: Number(f.site_lng.value), radius_m: Number(f.radius_m.value),
-        positions: [...new Set(f.positions.value.split('\n').map((x) => x.trim()).filter(Boolean))]
+        positions: [...new Set(f.positions.value.split('\n').map((x) => x.trim()).filter(Boolean))],
+        telegram_notify: f.telegram_notify.checked,
+        telegram_chat_id: f.telegram_chat_id.value.trim() || null,
+        telegram_topic_id: f.telegram_topic_id.value.trim() || null
       };
       busy(btn, true);
       try { await q(sb.from('settings').update(patch).eq('id', 1)); toast('บันทึกการตั้งค่าแล้ว'); }
       catch (e) { fail(e); } finally { busy(btn, false); }
+    };
+    document.getElementById('tg-test').onclick = async (ev) => {
+      const b = ev.target; busy(b, true);
+      try { await q(sb.rpc('tg_test')); toast('ส่งข้อความทดสอบแล้ว ดูในกลุ่ม Telegram (ถ้าไม่ขึ้น ให้กดบันทึกการตั้งค่าก่อน)'); }
+      catch (e) { fail(e); } finally { busy(b, false); }
     };
   }
 
