@@ -305,7 +305,6 @@
     setView(`
       <div class="head"><div><h1>เจ้าหน้าที่</h1><p class="muted">${active.length} คนที่ใช้งานอยู่</p></div>
         ${ro ? '<p class="muted">ดูอย่างเดียว</p>' : `<div class="row">
-          ${newPeople ? `<button class="btn quiet" type="button" id="import">นำเข้ารายชื่อจากเครื่องสแกน (${newPeople})</button>` : ''}
           <button class="btn" type="button" id="add">เพิ่มเจ้าหน้าที่</button>
         </div>`}
       </div>
