@@ -40,13 +40,13 @@
 
   // ---------------------------------------------------------------- routing
   const ROUTES = {
-    sheet: { view: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
+    sheet: { view: true, live: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
     staff: { view: true, title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
     monthly: { view: true, title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
     leave: { view: true, title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
     settings: { title: 'ตั้งค่า', admin: true, render: viewSettings },
     checkin: { title: 'ลงเวลา (มือถือ)', admin: false, render: viewCheckin },
-    me: { title: 'เวลาของฉัน', admin: false, render: viewMe }
+    me: { live: true, title: 'เวลาของฉัน', admin: false, render: viewMe }
   };
 
   function renderNav(current) {
@@ -66,8 +66,30 @@
     if (key !== 'checkin') stopCamera();
     document.title = ROUTES[key].title + ' · ระบบลงเวลา รพ.สต.สองคอน';
     renderNav(key);
+    clearTimeout(route._t);
     try { await ROUTES[key].render(); } catch (e) { fail(e); }
+    if (ROUTES[key].live) scheduleLive(location.hash);
   }
+
+  // หน้าใบบัญชี / เวลาของฉัน: โหลดข้อมูลใหม่เองทุก 1 นาที
+  // (ข้ามรอบถ้าแท็บไม่ได้เปิดดูอยู่ หรือกำลังพิมพ์/เลือกอะไรอยู่)
+  function scheduleLive(hash) {
+    clearTimeout(route._t);
+    route._t = setTimeout(() => {
+      if (location.hash !== hash) return;
+      const a = document.activeElement;
+      const typing = a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName);
+      if (document.visibilityState !== 'visible' || typing || document.querySelector('dialog[open]')) return scheduleLive(hash);
+      const y = window.scrollY;
+      route().then(() => window.scrollTo(0, y));
+    }, 60000);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && route._t && state.me) {
+      const key = (location.hash.replace(/^#\/?/, '').split('?')[0]);
+      if (ROUTES[key] && ROUTES[key].live) { const y = window.scrollY; route().then(() => window.scrollTo(0, y)); }
+    }
+  });
 
   // ---------------------------------------------------------------- auth
   async function loadSession() {
@@ -188,7 +210,7 @@
         <div class="tile"><b>${s.absent ?? 0}</b><span>ไม่มา / ลา</span></div>
         <div class="tile away"><b>${away}</b><span>ลงเวลานอกพื้นที่</span></div>
       </div>
-      <p class="muted no-print" style="font-size:14px">ข้อมูลจากเครื่องสแกนเข้าระบบล่าสุด ${thaiDateTime(sync && sync.last_sync_at)} · นับสายเมื่อมาหลัง ${hhmm(settings.work_start)} เกิน ${settings.late_grace_min} นาที</p>
+      <p class="muted no-print" style="font-size:14px">ข้อมูลจากเครื่องสแกนเข้าระบบล่าสุด ${thaiDateTime(sync && sync.last_sync_at)} · นับสายเมื่อมาหลัง ${hhmm(settings.work_start)} เกิน ${settings.late_grace_min} นาที · หน้านี้อัปเดตเองทุก 1 นาที</p>
 
       <article class="sheet" aria-label="ใบบัญชีลงเวลาสำหรับพิมพ์">
         <div class="sheet-head">
@@ -860,11 +882,14 @@
   async function viewMe() {
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     const month = params.get('m') || todayISO().slice(0, 7);
+    const pick = canView();
+    const people = pick ? await q(sb.from('staff').select('id, full_name, hip_user_id').eq('is_active', true).order('sort_order').order('full_name')) : [];
+    const who = (pick && people.find((p) => p.id === params.get('s'))) || state.me;
     const start = month + '-01T00:00:00+07:00';
     const endD = new Date(month + '-01T12:00:00Z'); endD.setUTCMonth(endD.getUTCMonth() + 1);
     const end = endD.toISOString().slice(0, 7) + '-01T00:00:00+07:00';
     const [logs, settings] = await Promise.all([
-      q(sb.from('attendance_logs').select('log_time, method, in_area, reason').eq('staff_id', state.me.id).gte('log_time', start).lt('log_time', end).order('log_time')),
+      q(sb.from('attendance_logs').select('log_time, method, in_area, reason').eq('staff_id', who.id).gte('log_time', start).lt('log_time', end).order('log_time')),
       q(sb.from('settings').select('work_start, late_grace_min').eq('id', 1).single())
     ]);
     const lateAfter = (() => { const [h, m] = hhmm(settings.work_start).split(':').map(Number); const t = h * 60 + m + settings.late_grace_min; return t; })();
@@ -883,15 +908,27 @@
       return `<tr><td>${thaiDate(d, { weekday: 'short' })}</td>
         <td>${tm(first.log_time)} <span class="tag none">${METHOD[first.method]}</span> ${late ? '<span class="tag late">สาย</span>' : ''}</td>
         <td>${last ? `${tm(last.log_time)} <span class="tag none">${METHOD[last.method]}</span>` : '<span class="muted">ไม่ได้สแกนกลับ</span>'}</td>
-        <td>${ls.some((x) => x.in_area === false) ? '<span class="tag away">นอกพื้นที่</span>' : ''}</td></tr>`;
+        <td>${ls.some((x) => x.in_area === false) ? '<span class="tag away">นอกพื้นที่</span>' : ''}</td>
+        <td class="muted" style="font-size:14px">${ls.length > 2 ? ls.map((x) => `${tm(x.log_time)} ${METHOD[x.method]}`).join(', ') : ''}</td></tr>`;
     }).join('');
+    const scanNote = who.hip_user_id ? `รหัสในเครื่องสแกน ${esc(who.hip_user_id)}`
+      : `<span class="tag late">ยังไม่ได้ใส่รหัสเครื่องสแกน</span> เวลาที่สแกนที่เครื่องจะยังไม่ขึ้น${isAdmin() ? ' — ใส่ได้ที่เมนูเจ้าหน้าที่' : ' — แจ้งผู้ดูแลระบบ'}`;
+    const nowTxt = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
     setView(`
-      <div class="head"><div><h1>เวลาของฉัน</h1><p class="muted">${esc(state.me.full_name)}</p></div>
-        <label class="f">เดือน<input type="month" id="month" value="${month}"></label></div>
+      <div class="head"><div><h1>${who.id === state.me.id ? 'เวลาของฉัน' : 'เวลาของ ' + esc(who.full_name)}</h1>
+          <p class="muted">${esc(who.full_name)} · ${scanNote}</p></div>
+        <div class="row">
+          ${pick ? `<label class="f">เจ้าหน้าที่<select id="who">${people.map((p) => `<option value="${p.id}"${p.id === who.id ? ' selected' : ''}>${esc(p.full_name)}</option>`).join('')}</select></label>` : ''}
+          <label class="f">เดือน<input type="month" id="month" value="${month}"></label>
+        </div></div>
       <div class="tiles"><div class="tile ok"><b>${byDay.size}</b><span>วันที่ลงเวลา</span></div><div class="tile late"><b>${lateCount}</b><span>วันที่มาสาย</span></div></div>
-      <div class="panel tbl-wrap"><table class="data"><thead><tr><th>วันที่</th><th>เวลามา</th><th>เวลากลับ</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" class="muted">ยังไม่มีการลงเวลาในเดือนนี้</td></tr>'}</tbody></table></div>`);
-    document.getElementById('month').onchange = (e) => { if (e.target.value) location.hash = '#/me?m=' + e.target.value; };
+      <div class="panel tbl-wrap"><table class="data"><thead><tr><th>วันที่</th><th>เวลามา</th><th>เวลากลับ</th><th></th><th>สแกนทั้งหมด</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="muted">ยังไม่มีการลงเวลาในเดือนนี้</td></tr>'}</tbody></table></div>
+      <p class="muted" style="font-size:14px">รวมเวลาจากเครื่องสแกนและมือถือ · หน้านี้อัปเดตเองทุก 1 นาที (ล่าสุด ${nowTxt} น.)</p>`);
+    const go = (m, sid) => { location.hash = '#/me?m=' + m + (sid && sid !== state.me.id ? '&s=' + sid : ''); };
+    document.getElementById('month').onchange = (e) => { if (e.target.value) go(e.target.value, who.id); };
+    const sel = document.getElementById('who');
+    if (sel) sel.onchange = (e) => go(month, e.target.value);
   }
 
   // ---------------------------------------------------------------- start
