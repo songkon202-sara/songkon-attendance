@@ -32,6 +32,7 @@ function Unprotect($b64) {
 $mutex = New-Object System.Threading.Mutex($false, 'Local\SongkonHipSync')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
+$script:Stage = 'เริ่มต้น'
 try {
   $cfg    = Get-Content (Join-Path $Here 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
   $secret = Unprotect $cfg.agentSecretProtected
@@ -58,6 +59,7 @@ try {
     } finally { $cn.Close() }
   }
 
+  $script:Stage = 'อ่านรายชื่อ/ส่งรายชื่อ (hip_people_upsert)'
   # 1) รายชื่อเจ้าหน้าที่ในเครื่อง (ใช้นำเข้ารายชื่อบนหน้าเว็บ)
   $people = Query "SELECT enrollnumber, studentname, active FROM dbo.Student WHERE enrollnumber IS NOT NULL" @{}
   $pRows = @($people.Rows | ForEach-Object {
@@ -66,6 +68,7 @@ try {
   })
   if ($pRows.Count -gt 0) { [void](Rpc 'hip_people_upsert' @{ p_secret = $secret; p_rows = $pRows }) }
 
+  $script:Stage = 'ถาม id ล่าสุด (hip_last_scan_id)'
   # 2) รายการสแกนใหม่ ต่อจาก id ล่าสุดที่ระบบรับแล้ว
   $last  = [long](Rpc 'hip_last_scan_id' @{ p_secret = $secret })
   $total = 0
@@ -87,6 +90,7 @@ try {
          mode_str = $modeStr
          time = $ts.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture) + '+07:00' }
     })
+    $script:Stage = 'ส่งรายการสแกน (hip_ingest)'
     $res   = Rpc 'hip_ingest' @{ p_secret = $secret; p_rows = $rows }
     $last  = [long]$res.last_scan_id
     $total += $rows.Count
@@ -97,7 +101,8 @@ try {
   exit 0
 }
 catch {
-  Log ("ผิดพลาด: " + $_.Exception.Message)
+  $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { ' | ' + $_.ErrorDetails.Message } else { '' }
+  Log ("ผิดพลาด [$script:Stage]: " + $_.Exception.Message + $detail)
   exit 1
 }
 finally {
