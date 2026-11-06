@@ -452,10 +452,18 @@
   // ---------------------------------------------------------------- start
   document.getElementById('logout').onclick = async () => { await sb.auth.signOut(); };
   window.addEventListener('hashchange', route);
-  sb.auth.onAuthStateChange(async (event) => {
-    if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
-      try { await loadSession(); } catch (e) { fail(e); }
-      route();
+  // อย่ารอ (await) คำสั่ง Supabase ภายใน onAuthStateChange โดยตรง — ทำให้ค้างได้
+  // จึงเลื่อนไปทำหลัง callback จบ และกันไม่ให้โหลดซ้อนกัน
+  let lastUid;
+  async function refresh() {
+    try { await loadSession(); } catch (e) { fail(e); }
+    route();
+  }
+  sb.auth.onAuthStateChange((event, session) => {
+    const uid = session ? session.user.id : null;
+    if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT' || (event === 'SIGNED_IN' && uid !== lastUid)) {
+      lastUid = uid;
+      setTimeout(refresh, 0);
     }
   });
 })();
