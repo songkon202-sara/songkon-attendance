@@ -49,10 +49,19 @@ begin
       n_dup := n_dup + 1;
       select count(*) into n_tmp from attendance_logs where staff_id = d.id;
       n_logs := n_logs + n_tmp;
+      -- สแกนเก่าที่ค้างอยู่ด้วยเลขเดิมของแถวซ้ำ (เลขในเครื่องชุดเก่า) → ย้ายเข้าคนนี้
+      select count(*) into n_tmp from hip_unmatched where d.hip_user_id is not null and enroll_number = d.hip_user_id;
+      n_logs := n_logs + n_tmp;
       if p_apply then
         delete from attendance_logs a using attendance_logs b
           where a.staff_id = d.id and b.staff_id = k.id and a.log_time = b.log_time and a.method = b.method;
         update attendance_logs set staff_id = k.id where staff_id = d.id;
+        with moved as (
+          delete from hip_unmatched u where d.hip_user_id is not null and u.enroll_number = d.hip_user_id returning u.*
+        )
+        insert into attendance_logs (staff_id, log_time, method, hip_scan_id, hip_verify)
+        select k.id, log_time, hip_method(null, split_part(hip_verify, ':', 2)), hip_scan_id, hip_verify
+        from moved on conflict do nothing;
         delete from leave_records a using leave_records b
           where a.staff_id = d.id and b.staff_id = k.id and a.day = b.day;
         update leave_records set staff_id = k.id where staff_id = d.id;
@@ -82,6 +91,17 @@ begin
     แถวซ้ำที่ลบ := n_dup; สแกนที่ย้าย := n_logs; หมายเหตุ := note;
     return next;
   end loop;
+
+  -- 4) สแกนเก่าที่ยังค้าง (เลขชุดเดิม) ติดป้าย "เดิม-" กันไม่ให้ไปเข้าคนที่ได้เลขนี้ในชุดใหม่
+  if p_apply then
+    update hip_unmatched set enroll_number = 'เดิม-' || enroll_number where enroll_number not like 'เดิม-%';
+  end if;
+  ชื่อ := '(สแกนเก่าที่ยังไม่รู้ว่าเป็นใคร)'; ตำแหน่ง := null; รหัสพนักงาน := null; เลขในเครื่องสแกน := null; แถวซ้ำที่ลบ := 0;
+  select count(*) into สแกนที่ย้าย from hip_unmatched u
+   where not exists (select 1 from staff s where s.is_active and s.hip_user_id = u.enroll_number
+                       and exists (select 1 from staff k2 where k2.is_active and k2.id <> s.id and norm_name(k2.full_name) = norm_name(s.full_name)));
+  หมายเหตุ := 'เก็บไว้ในรายการค้าง (ติดป้าย เดิม-) ย้ายเข้าชื่อทีหลังได้';
+  return next;
 
 end $$;
 
