@@ -144,3 +144,10 @@ table.data.compact select { max-width: 150px; }
   .ledger tbody tr.blank:nth-child(n+11) { display: none; }
 }
 @media print { .ledger tbody tr.blank { display: table-row !important; } }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions .btn { min-height: 36px; padding: 4px 12px; margin-left: 4px; }
+dialog { border: 0; border-radius: 16px; padding: 22px; width: min(560px, calc(100% - 32px)); box-shadow: 0 20px 60px rgba(20,35,26,.25); color: var(--ink); }
+dialog::backdrop { background: rgba(20, 35, 26, .45); }
+label.check { display: flex; align-items: center; gap: 8px; font-size: 15px; min-height: 44px; }
+textarea { width: 100%; resize: vertical; }
+details > summary { cursor: pointer; min-height: 32px; }

@@ -213,93 +213,175 @@
 
   // ---------------------------------------------------------------- เจ้าหน้าที่
   async function viewStaff() {
-    const [staff, users, emails, unmatched, people] = await Promise.all([
+    const [staff, users, emails, unmatched, people, settings, counts] = await Promise.all([
       q(sb.from('staff').select('*').order('sort_order').order('full_name')),
       q(sb.rpc('list_unlinked_users')),
       q(sb.rpc('staff_emails')),
       q(sb.from('hip_unmatched_summary').select('*').order('enroll_number')),
-      q(sb.from('hip_people').select('enroll_number'))
+      q(sb.from('hip_people').select('enroll_number')),
+      q(sb.from('settings').select('positions').eq('id', 1).single()),
+      q(sb.rpc('staff_scan_counts'))
     ]);
     const emailOf = Object.fromEntries(emails.map((e) => [e.staff_id, e.email]));
+    const scansOf = Object.fromEntries(counts.map((c) => [c.staff_id, Number(c.scans)]));
+    const positions = settings.positions || [];
+    const active = staff.filter((s) => s.is_active);
+    const inactive = staff.filter((s) => !s.is_active);
     const known = new Set(staff.map((s) => s.hip_user_id).filter(Boolean));
     const newPeople = people.filter((p) => !known.has(p.enroll_number)).length;
     const opt = (obj, val) => Object.entries(obj).map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('');
 
-    const rows = staff.map((s) => `
-      <tr data-id="${s.id}">
-        <td><input type="number" name="sort_order" value="${s.sort_order}" style="width:56px" aria-label="ลำดับ"></td>
-        <td><input name="full_name" value="${esc(s.full_name)}" style="width:100%;min-width:140px" aria-label="ชื่อ-สกุล"></td>
-        <td><input name="position" value="${esc(s.position)}" style="width:100%;min-width:110px" aria-label="ตำแหน่ง"></td>
-        <td><select name="staff_type" aria-label="ประเภท">${opt(TYPE, s.staff_type)}</select></td>
-        <td><input name="hip_user_id" value="${esc(s.hip_user_id)}" style="width:60px" aria-label="รหัสเครื่องสแกน"></td>
-        <td><select name="role" aria-label="สิทธิ์">${opt({ staff: 'เจ้าหน้าที่', admin: 'ผู้ดูแล' }, s.role)}</select></td>
-        <td style="text-align:center"><input type="checkbox" name="on_sheet" ${s.on_sheet ? 'checked' : ''} aria-label="แสดงในใบบัญชี"></td>
-        <td style="text-align:center"><input type="checkbox" name="is_active" ${s.is_active ? 'checked' : ''} aria-label="ใช้งาน"></td>
-        <td>${emailOf[s.id] ? `<span class="tag">${esc(emailOf[s.id])}</span>` :
-          (users.length ? `<select name="link" aria-label="ผูกบัญชี"><option value="">— ผูกบัญชี —</option>${users.map((u) => `<option value="${u.user_id}">${esc(u.email)}</option>`).join('')}</select>` : '<span class="tag none">ยังไม่มีบัญชี</span>')}</td>
-        <td><button class="btn quiet" type="button" data-save>บันทึก</button></td>
-      </tr>`).join('');
+    const rowHtml = (s, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td><b>${esc(s.full_name)}</b>${s.on_sheet ? '' : ' <span class="tag none">ไม่แสดงในใบบัญชี</span>'}</td>
+        <td>${esc(s.position || '—')}</td>
+        <td>${esc(TYPE[s.staff_type] || '')}</td>
+        <td>${esc(s.hip_user_id || '—')}</td>
+        <td>${s.role === 'admin' ? '<span class="tag">ผู้ดูแล</span>' : 'เจ้าหน้าที่'}</td>
+        <td>${emailOf[s.id] ? esc(emailOf[s.id]) : '<span class="muted">—</span>'}</td>
+        <td class="actions">
+          <button class="btn quiet" type="button" data-edit="${s.id}">แก้ไข</button>
+          ${s.id === state.me.id ? '' : `<button class="btn danger" type="button" data-off="${s.id}">ลบ</button>`}
+        </td>
+      </tr>`;
 
     setView(`
-      <div class="head"><div><h1>เจ้าหน้าที่</h1><p class="muted">ผูกรหัสในเครื่องสแกน HIP กับชื่อ และผูกบัญชีล็อกอินของแต่ละคน</p></div>
+      <div class="head"><div><h1>เจ้าหน้าที่</h1><p class="muted">${active.length} คนที่ใช้งานอยู่</p></div>
         <div class="row">
-          <button class="btn" type="button" id="import"${newPeople ? '' : ' disabled'}>นำเข้ารายชื่อจากเครื่องสแกน${newPeople ? ` (${newPeople})` : ''}</button>
-          <button class="btn quiet" type="button" id="add">เพิ่มเจ้าหน้าที่</button>
+          ${newPeople ? `<button class="btn quiet" type="button" id="import">นำเข้ารายชื่อจากเครื่องสแกน (${newPeople})</button>` : ''}
+          <button class="btn" type="button" id="add">เพิ่มเจ้าหน้าที่</button>
         </div>
       </div>
       ${unmatched.length ? `
       <div class="panel" style="border-color:#EAD3A8;background:#FFF8EC">
         <h2>รายการสแกนที่ยังไม่รู้ว่าเป็นใคร</h2>
-        <p class="muted">ใส่รหัสนี้ในช่อง "รหัสเครื่องสแกน" ของเจ้าหน้าที่ แล้วกด "ย้ายรายการค้าง"</p>
-        <div class="tbl-wrap"><table class="data"><thead><tr><th>รหัสเครื่องสแกน</th><th>ชื่อในเครื่อง</th><th>จำนวน</th><th>ล่าสุด</th></tr></thead><tbody>
+        <p class="muted">กด "แก้ไข" ที่เจ้าหน้าที่คนนั้น ใส่รหัสในช่อง "รหัสในเครื่องสแกน" แล้วกด "ย้ายรายการค้าง"</p>
+        <div class="tbl-wrap"><table class="data"><thead><tr><th>รหัสในเครื่องสแกน</th><th>ชื่อในเครื่อง</th><th>จำนวน</th><th>ล่าสุด</th></tr></thead><tbody>
           ${unmatched.map((u) => `<tr><td>${esc(u.enroll_number)}</td><td>${esc(u.hip_name || '—')}</td><td>${u.scans}</td><td>${thaiDateTime(u.last_scan)}</td></tr>`).join('')}
         </tbody></table></div>
         <button class="btn quiet" type="button" id="rematch" style="margin-top:10px">ย้ายรายการค้าง</button>
       </div>` : ''}
       <div class="panel tbl-wrap">
-        <table class="data compact">
-          <thead><tr><th>ลำดับ</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th>ประเภท</th><th>รหัสสแกน</th><th>สิทธิ์</th><th>ในใบบัญชี</th><th>ใช้งาน</th><th>บัญชีล็อกอิน</th><th></th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="10" class="muted">ยังไม่มีเจ้าหน้าที่ กด "นำเข้ารายชื่อจากเครื่องสแกน" หรือ "เพิ่มเจ้าหน้าที่"</td></tr>'}</tbody>
+        <table class="data">
+          <thead><tr><th>ลำดับ</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th>ประเภท</th><th>รหัสสแกน</th><th>สิทธิ์</th><th>บัญชีล็อกอิน</th><th></th></tr></thead>
+          <tbody>${active.map(rowHtml).join('') || '<tr><td colspan="8" class="muted">ยังไม่มีเจ้าหน้าที่ กด "เพิ่มเจ้าหน้าที่"</td></tr>'}</tbody>
         </table>
-      </div>`);
+      </div>
+      ${inactive.length ? `
+      <details class="panel">
+        <summary><b>เลิกใช้งานแล้ว (${inactive.length})</b> <span class="muted">— ไม่แสดงในใบบัญชี แต่ประวัติลงเวลายังอยู่</span></summary>
+        <div class="tbl-wrap" style="margin-top:10px"><table class="data"><tbody>
+          ${inactive.map((s) => `<tr><td>${esc(s.full_name)}</td><td>${esc(s.position || '')}</td><td>${scansOf[s.id] || 0} รายการสแกน</td>
+            <td class="actions"><button class="btn quiet" type="button" data-on="${s.id}">ใช้งานอีกครั้ง</button>
+            ${scansOf[s.id] ? '' : `<button class="btn danger" type="button" data-purge="${s.id}">ลบถาวร</button>`}</td></tr>`).join('')}
+        </tbody></table></div>
+      </details>` : ''}
 
-    $app.querySelectorAll('[data-save]').forEach((btn) => btn.onclick = async () => {
-      const tr = btn.closest('tr'), id = tr.dataset.id, v = (n) => tr.querySelector(`[name="${n}"]`);
+      <dialog id="staff-dlg" aria-labelledby="dlg-title">
+        <form id="staff-form" method="dialog">
+          <h2 id="dlg-title">แก้ไขเจ้าหน้าที่</h2>
+          <div class="grid2">
+            <label class="f" style="grid-column:1/-1">ชื่อ-สกุล<input name="full_name" required></label>
+            <label class="f" style="grid-column:1/-1">ตำแหน่ง <span class="muted" style="font-size:13px">เลือกจากรายการ หรือพิมพ์ตำแหน่งใหม่</span>
+              <input name="position" list="pos-list" autocomplete="off" placeholder="เลือกหรือพิมพ์ตำแหน่ง">
+              <datalist id="pos-list">${positions.map((p) => `<option value="${esc(p)}"></option>`).join('')}</datalist>
+            </label>
+            <label class="f">ประเภท<select name="staff_type">${opt(TYPE, 'civil')}</select></label>
+            <label class="f">รหัสในเครื่องสแกน<input name="hip_user_id" inputmode="numeric" placeholder="เช่น 5"></label>
+            <label class="f">ลำดับในใบบัญชี<input name="sort_order" type="number" min="0"></label>
+            <label class="f">สิทธิ์<select name="role">${opt({ staff: 'เจ้าหน้าที่', admin: 'ผู้ดูแลระบบ' }, 'staff')}</select></label>
+            <label class="f" style="grid-column:1/-1">บัญชีล็อกอิน<select name="link"></select></label>
+            <label class="check" style="grid-column:1/-1"><input type="checkbox" name="on_sheet"> แสดงในใบบัญชีลงเวลา</label>
+          </div>
+          <p class="err" id="dlg-err" role="alert"></p>
+          <div class="row" style="justify-content:flex-end;margin-top:8px">
+            <button class="btn quiet" type="button" id="dlg-cancel">ยกเลิก</button>
+            <button class="btn" type="submit" id="dlg-save">บันทึก</button>
+          </div>
+        </form>
+      </dialog>`);
+
+    // ---- ฟอร์มเพิ่ม/แก้ไข
+    const dlg = document.getElementById('staff-dlg'), f = document.getElementById('staff-form');
+    let editing = null;
+    function openForm(s) {
+      editing = s || null;
+      document.getElementById('dlg-title').textContent = s ? 'แก้ไขเจ้าหน้าที่' : 'เพิ่มเจ้าหน้าที่';
+      document.getElementById('dlg-err').textContent = '';
+      const maxOrder = staff.reduce((m, x) => Math.max(m, x.sort_order || 0), 0);
+      f.full_name.value = s ? s.full_name : '';
+      f.position.value = s ? (s.position || '') : '';
+      f.staff_type.value = s ? s.staff_type : 'civil';
+      f.hip_user_id.value = s ? (s.hip_user_id || '') : '';
+      f.sort_order.value = s ? s.sort_order : maxOrder + 1;
+      f.role.value = s ? s.role : 'staff';
+      f.on_sheet.checked = s ? s.on_sheet : true;
+      const cur = s && emailOf[s.id];
+      f.link.innerHTML = (cur ? `<option value="">${esc(cur)} (ผูกอยู่)</option>` : '<option value="">— ไม่ผูกบัญชี —</option>') +
+        users.map((u) => `<option value="${u.user_id}">${esc(u.email)}</option>`).join('');
+      f.link.disabled = !users.length;
+      dlg.showModal();
+      f.full_name.focus();
+    }
+    document.getElementById('dlg-cancel').onclick = () => dlg.close();
+    f.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const err = document.getElementById('dlg-err'), btn = document.getElementById('dlg-save');
       const patch = {
-        sort_order: Number(v('sort_order').value) || 0,
-        full_name: v('full_name').value.trim(),
-        position: v('position').value.trim() || null,
-        staff_type: v('staff_type').value,
-        hip_user_id: v('hip_user_id').value.trim() || null,
-        role: v('role').value,
-        on_sheet: v('on_sheet').checked,
-        is_active: v('is_active').checked
+        full_name: f.full_name.value.trim(),
+        position: f.position.value.trim() || null,
+        staff_type: f.staff_type.value,
+        hip_user_id: f.hip_user_id.value.trim() || null,
+        sort_order: Number(f.sort_order.value) || 0,
+        role: f.role.value,
+        on_sheet: f.on_sheet.checked
       };
-      if (!patch.full_name) return toast('กรอกชื่อ-สกุลก่อนบันทึก');
-      if (id === state.me.id && patch.role !== 'admin' && !confirm('ถ้าเปลี่ยนสิทธิ์ของตัวเองเป็นเจ้าหน้าที่ จะเข้าหน้าผู้ดูแลไม่ได้อีก ยืนยันไหม')) return;
+      if (!patch.full_name) { err.textContent = 'กรอกชื่อ-สกุล'; return; }
+      if (patch.hip_user_id && staff.some((x) => x.hip_user_id === patch.hip_user_id && (!editing || x.id !== editing.id))) {
+        err.textContent = 'รหัสในเครื่องสแกนนี้ใช้กับเจ้าหน้าที่คนอื่นแล้ว'; return;
+      }
+      if (editing && editing.id === state.me.id && patch.role !== 'admin' &&
+          !confirm('ถ้าเปลี่ยนสิทธิ์ของตัวเองเป็นเจ้าหน้าที่ จะเข้าหน้าผู้ดูแลไม่ได้อีก ยืนยันไหม')) return;
       busy(btn, true);
       try {
-        await q(sb.from('staff').update(patch).eq('id', id));
-        const link = v('link');
-        if (link && link.value) await q(sb.rpc('link_staff_user', { p_staff_id: id, p_user_id: link.value }));
-        toast('บันทึกแล้ว');
+        let id = editing && editing.id;
+        if (id) await q(sb.from('staff').update(patch).eq('id', id));
+        else id = (await q(sb.from('staff').insert(patch).select('id').single())).id;
+        if (f.link.value) await q(sb.rpc('link_staff_user', { p_staff_id: id, p_user_id: f.link.value }));
+        // ตำแหน่งใหม่ที่พิมพ์เอง → เพิ่มเข้ารายการ
+        if (patch.position && !positions.includes(patch.position)) {
+          await q(sb.from('settings').update({ positions: positions.concat(patch.position) }).eq('id', 1));
+        }
+        dlg.close();
+        toast(editing ? 'บันทึกการแก้ไขแล้ว' : 'เพิ่มเจ้าหน้าที่แล้ว');
         await loadSession(); route();
-      } catch (e) { fail(e); busy(btn, false); }
+      } catch (e) { err.textContent = e.message; busy(btn, false); }
+    };
+
+    document.getElementById('add').onclick = () => openForm(null);
+    $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => openForm(staff.find((s) => s.id === b.dataset.edit)));
+
+    // ---- ลบ = ย้ายไปเลิกใช้งาน (เก็บประวัติ)
+    $app.querySelectorAll('[data-off]').forEach((b) => b.onclick = async () => {
+      const s = staff.find((x) => x.id === b.dataset.off);
+      if (!confirm(`ลบ "${s.full_name}" ออกจากรายชื่อ?\n\nจะไม่แสดงในใบบัญชีอีก แต่ประวัติลงเวลาเดิมยังอยู่ และกู้คืนได้จากส่วน "เลิกใช้งานแล้ว"`)) return;
+      try { await q(sb.from('staff').update({ is_active: false }).eq('id', s.id)); toast('ย้ายไปเลิกใช้งานแล้ว'); route(); } catch (e) { fail(e); }
     });
+    $app.querySelectorAll('[data-on]').forEach((b) => b.onclick = async () => {
+      try { await q(sb.from('staff').update({ is_active: true }).eq('id', b.dataset.on)); toast('กลับมาใช้งานแล้ว'); route(); } catch (e) { fail(e); }
+    });
+    $app.querySelectorAll('[data-purge]').forEach((b) => b.onclick = async () => {
+      const s = staff.find((x) => x.id === b.dataset.purge);
+      if (!confirm(`ลบ "${s.full_name}" ถาวร? ทำย้อนกลับไม่ได้`)) return;
+      try { await q(sb.rpc('delete_staff_if_unused', { p_staff_id: s.id })); toast('ลบถาวรแล้ว'); route(); } catch (e) { fail(e); }
+    });
+
     const imp = document.getElementById('import');
-    imp.onclick = async () => {
+    if (imp) imp.onclick = async () => {
       busy(imp, true);
       try { const r = await q(sb.rpc('import_hip_people')); toast(`เพิ่มเจ้าหน้าที่ ${r.new_staff} คน · ย้ายรายการสแกน ${r.moved_scans} รายการ`); route(); }
       catch (e) { fail(e); busy(imp, false); }
-    };
-    document.getElementById('add').onclick = async () => {
-      const name = prompt('ชื่อ-สกุลของเจ้าหน้าที่');
-      if (!name || !name.trim()) return;
-      try {
-        const max = staff.reduce((m, s) => Math.max(m, s.sort_order || 0), 0);
-        await q(sb.from('staff').insert({ full_name: name.trim(), sort_order: max + 1 }));
-        toast('เพิ่มแล้ว'); route();
-      } catch (e) { fail(e); }
     };
     const rm = document.getElementById('rematch');
     if (rm) rm.onclick = async () => {
@@ -389,6 +471,9 @@
           ${field('site_lng', 'ลองจิจูด', 'number', 'step="0.000001"')}
           ${field('radius_m', 'รัศมี (เมตร)', 'number', 'min="20" max="5000"')}
         </div>
+        <h2 style="margin-top:20px">รายการตำแหน่ง</h2>
+        <label class="f">หนึ่งบรรทัดต่อหนึ่งตำแหน่ง (ใช้ในช่องเลือกตำแหน่งของหน้าเจ้าหน้าที่)
+          <textarea name="positions" rows="8">${esc((s.positions || []).join('\n'))}</textarea></label>
         <button class="btn" type="submit" style="margin-top:16px">บันทึกการตั้งค่า</button>
       </form>
       <div class="panel">
@@ -403,7 +488,8 @@
       const patch = {
         work_start: f.work_start.value, late_grace_min: Number(f.late_grace_min.value),
         work_end: f.work_end.value, vacancies: Number(f.vacancies.value),
-        site_lat: Number(f.site_lat.value), site_lng: Number(f.site_lng.value), radius_m: Number(f.radius_m.value)
+        site_lat: Number(f.site_lat.value), site_lng: Number(f.site_lng.value), radius_m: Number(f.radius_m.value),
+        positions: [...new Set(f.positions.value.split('\n').map((x) => x.trim()).filter(Boolean))]
       };
       busy(btn, true);
       try { await q(sb.from('settings').update(patch).eq('id', 1)); toast('บันทึกการตั้งค่าแล้ว'); }
