@@ -477,6 +477,12 @@
           ${field('telegram_chat_id', 'Chat ID ของกลุ่ม (ขึ้นต้น -100)', 'text')}
           ${field('telegram_topic_id', 'เลขหัวข้อ (Topic)', 'text')}
         </div>
+        <h2 style="margin-top:20px">นอกเวลาราชการ</h2>
+        <div class="grid2">
+          ${field('ot_start', 'เริ่ม', 'time')}
+          ${field('ot_end', 'เลิก', 'time')}
+          ${field('summary_time2', 'ส่งสรุปเวรนอกเวลาเข้า Telegram', 'time')}
+        </div>
         <button class="btn quiet" type="button" id="tg-test" style="margin-top:10px">ทดสอบส่งข้อความ</button>
         <h2 style="margin-top:20px">รายการตำแหน่ง</h2>
         <label class="f">หนึ่งบรรทัดต่อหนึ่งตำแหน่ง (ใช้ในช่องเลือกตำแหน่งของหน้าเจ้าหน้าที่)
@@ -499,7 +505,9 @@
         positions: [...new Set(f.positions.value.split('\n').map((x) => x.trim()).filter(Boolean))],
         telegram_notify: f.telegram_notify.checked,
         telegram_chat_id: f.telegram_chat_id.value.trim() || null,
-        telegram_topic_id: f.telegram_topic_id.value.trim() || null
+        telegram_topic_id: f.telegram_topic_id.value.trim() || null,
+        ot_start: f.ot_start.value || '16:30', ot_end: f.ot_end.value || '18:30',
+        summary_time2: f.summary_time2.value || null
       };
       busy(btn, true);
       try { await q(sb.from('settings').update(patch).eq('id', 1)); toast('บันทึกการตั้งค่าแล้ว'); }
