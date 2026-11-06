@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ระบบลงเวลา รพ.สต.สองคอน</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="bar" id="bar" hidden>
+  <div class="bar-in">
+    <a class="brand" href="#/sheet">
+      <img src="assets/moph.png" alt="" width="34" height="34">
+      <span>ระบบลงเวลา<br><small>รพ.สต.สองคอน</small></span>
+    </a>
+    <nav id="nav" aria-label="เมนูหลัก"></nav>
+    <div class="who">
+      <span id="who-name"></span>
+      <button type="button" class="link" id="logout">ออกจากระบบ</button>
+    </div>
+  </div>
+</header>
+<main id="app" tabindex="-1"><p class="muted pad">กำลังโหลด…</p></main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
