@@ -16,6 +16,9 @@
   const thaiDate = (iso, opts) => new Date(iso + 'T00:00:00+07:00').toLocaleDateString('th-TH', Object.assign({ timeZone: 'Asia/Bangkok', day: 'numeric', month: 'long', year: 'numeric' }, opts || {}));
   const thaiDateTime = (ts) => (ts ? new Date(ts).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' }) : '—');
   const isAdmin = () => state.me && state.me.role === 'admin';
+  // ผู้บริหาร (เช่น ผู้อำนวยการ) เห็นข้อมูลทุกคนเหมือนแอดมิน แต่แก้ไขไม่ได้
+  const canView = () => state.me && (state.me.role === 'admin' || state.me.role === 'viewer');
+  const ROLE = { staff: 'เจ้าหน้าที่', viewer: 'ผู้บริหาร (ดูอย่างเดียว)', admin: 'ผู้ดูแลระบบ' };
 
   function toast(msg) {
     const t = document.getElementById('toast');
@@ -37,17 +40,18 @@
 
   // ---------------------------------------------------------------- routing
   const ROUTES = {
-    sheet: { title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
-    staff: { title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
-    monthly: { title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
-    leave: { title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
+    sheet: { view: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
+    staff: { view: true, title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
+    monthly: { view: true, title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
+    leave: { view: true, title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
     settings: { title: 'ตั้งค่า', admin: true, render: viewSettings },
     checkin: { title: 'ลงเวลา (มือถือ)', admin: false, render: viewCheckin },
     me: { title: 'เวลาของฉัน', admin: false, render: viewMe }
   };
 
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'monthly', 'staff', 'leave', 'settings', 'checkin', 'me'] : ['checkin', 'me'];
+    const keys = isAdmin() ? ['sheet', 'monthly', 'staff', 'leave', 'settings', 'checkin', 'me']
+      : canView() ? ['sheet', 'monthly', 'staff', 'leave', 'checkin', 'me'] : ['checkin', 'me'];
     document.getElementById('nav').innerHTML = keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
   }
@@ -55,8 +59,10 @@
   async function route() {
     if (!state.user) return viewLogin();
     if (!state.me) return viewPending();
-    let key = (location.hash.replace(/^#\/?/, '').split('?')[0]) || (isAdmin() ? 'sheet' : 'checkin');
-    if (!ROUTES[key] || (ROUTES[key].admin && !isAdmin())) key = isAdmin() ? 'sheet' : 'checkin';
+    const home = canView() ? 'sheet' : 'checkin';
+    let key = (location.hash.replace(/^#\/?/, '').split('?')[0]) || home;
+    const allowed = (r) => r && (!r.admin || isAdmin() || (r.view && canView()));
+    if (!allowed(ROUTES[key])) key = home;
     if (key !== 'checkin') stopCamera();
     document.title = ROUTES[key].title + ' · ระบบลงเวลา รพ.สต.สองคอน';
     renderNav(key);
@@ -255,6 +261,7 @@
     const inactive = staff.filter((s) => !s.is_active);
     const known = new Set(staff.map((s) => s.hip_user_id).filter(Boolean));
     const newPeople = people.filter((p) => !known.has(p.enroll_number)).length;
+    const ro = !isAdmin();
     const opt = (obj, val) => Object.entries(obj).map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('');
 
     const rowHtml = (s, i) => `
@@ -264,22 +271,22 @@
         <td>${esc(s.position || '—')}</td>
         <td>${esc(TYPE[s.staff_type] || '')}</td>
         <td>${esc(s.hip_user_id || '—')}</td>
-        <td>${s.role === 'admin' ? '<span class="tag">ผู้ดูแล</span>' : 'เจ้าหน้าที่'}</td>
+        <td>${s.role === 'staff' ? 'เจ้าหน้าที่' : `<span class="tag${s.role === 'viewer' ? ' away' : ''}">${s.role === 'admin' ? 'ผู้ดูแล' : 'ผู้บริหาร'}</span>`}</td>
         <td>${emailOf[s.id] ? esc(emailOf[s.id]) : '<span class="muted">—</span>'}</td>
-        <td class="actions">
+        <td class="actions">${ro ? '' : `
           <button class="btn quiet" type="button" data-edit="${s.id}">แก้ไข</button>
-          ${s.id === state.me.id ? '' : `<button class="btn danger" type="button" data-off="${s.id}">ลบ</button>`}
+          ${s.id === state.me.id ? '' : `<button class="btn danger" type="button" data-off="${s.id}">ลบ</button>`}`}
         </td>
       </tr>`;
 
     setView(`
       <div class="head"><div><h1>เจ้าหน้าที่</h1><p class="muted">${active.length} คนที่ใช้งานอยู่</p></div>
-        <div class="row">
+        ${ro ? '<p class="muted">ดูอย่างเดียว</p>' : `<div class="row">
           ${newPeople ? `<button class="btn quiet" type="button" id="import">นำเข้ารายชื่อจากเครื่องสแกน (${newPeople})</button>` : ''}
           <button class="btn" type="button" id="add">เพิ่มเจ้าหน้าที่</button>
-        </div>
+        </div>`}
       </div>
-      ${unmatched.length ? `
+      ${unmatched.length && !ro ? `
       <div class="panel" style="border-color:#EAD3A8;background:#FFF8EC">
         <h2>รายการสแกนที่ยังไม่รู้ว่าเป็นใคร</h2>
         <p class="muted">กด "แก้ไข" ที่เจ้าหน้าที่คนนั้น ใส่รหัสในช่อง "รหัสในเครื่องสแกน" แล้วกด "ย้ายรายการค้าง"</p>
@@ -299,8 +306,8 @@
         <summary><b>เลิกใช้งานแล้ว (${inactive.length})</b> <span class="muted">— ไม่แสดงในใบบัญชี แต่ประวัติลงเวลายังอยู่</span></summary>
         <div class="tbl-wrap" style="margin-top:10px"><table class="data"><tbody>
           ${inactive.map((s) => `<tr><td>${esc(s.full_name)}</td><td>${esc(s.position || '')}</td><td>${scansOf[s.id] || 0} รายการสแกน</td>
-            <td class="actions"><button class="btn quiet" type="button" data-on="${s.id}">ใช้งานอีกครั้ง</button>
-            ${scansOf[s.id] ? '' : `<button class="btn danger" type="button" data-purge="${s.id}">ลบถาวร</button>`}</td></tr>`).join('')}
+            <td class="actions">${ro ? '' : `<button class="btn quiet" type="button" data-on="${s.id}">ใช้งานอีกครั้ง</button>
+            ${scansOf[s.id] ? '' : `<button class="btn danger" type="button" data-purge="${s.id}">ลบถาวร</button>`}`}</td></tr>`).join('')}
         </tbody></table></div>
       </details>` : ''}
 
@@ -316,7 +323,7 @@
             <label class="f">ประเภท<select name="staff_type">${opt(TYPE, 'civil')}</select></label>
             <label class="f">รหัสในเครื่องสแกน<input name="hip_user_id" inputmode="numeric" placeholder="เช่น 5"></label>
             <label class="f">ลำดับในใบบัญชี<input name="sort_order" type="number" min="0"></label>
-            <label class="f">สิทธิ์<select name="role">${opt({ staff: 'เจ้าหน้าที่', admin: 'ผู้ดูแลระบบ' }, 'staff')}</select></label>
+            <label class="f">สิทธิ์<select name="role">${opt(ROLE, 'staff')}</select></label>
             <label class="f" style="grid-column:1/-1">บัญชีล็อกอิน<select name="link"></select></label>
             <label class="check" style="grid-column:1/-1"><input type="checkbox" name="on_sheet"> แสดงในใบบัญชีลงเวลา</label>
           </div>
@@ -332,6 +339,7 @@
         </form>
       </dialog>`);
 
+    if (ro) return;
     // ---- ฟอร์มเพิ่ม/แก้ไข
     const dlg = document.getElementById('staff-dlg'), f = document.getElementById('staff-form');
     let editing = null;
@@ -377,7 +385,7 @@
         err.textContent = 'รหัสในเครื่องสแกนนี้ใช้กับเจ้าหน้าที่คนอื่นแล้ว'; return;
       }
       if (editing && editing.id === state.me.id && patch.role !== 'admin' &&
-          !confirm('ถ้าเปลี่ยนสิทธิ์ของตัวเองเป็นเจ้าหน้าที่ จะเข้าหน้าผู้ดูแลไม่ได้อีก ยืนยันไหม')) return;
+          !confirm('ถ้าเปลี่ยนสิทธิ์ของตัวเองเป็น "' + ROLE[patch.role] + '" จะแก้ไขข้อมูลไม่ได้อีก ยืนยันไหม')) return;
       busy(btn, true);
       try {
         let id = editing && editing.id;
@@ -514,9 +522,10 @@
       q(sb.from('leave_records').select('id, day, kind, note, staff_id').gte('day', start).lt('day', end).order('day'))
     ]);
     const nameOf = Object.fromEntries(staff.map((s) => [s.id, s.full_name]));
+    const ro = !isAdmin();
     setView(`
       <div class="head"><div><h1>ลา / ไปราชการ</h1><p class="muted">บันทึกวันที่เจ้าหน้าที่ลาหรือไปราชการ เพื่อให้ใบบัญชีนับถูกช่อง</p></div></div>
-      <form class="panel" id="lv-form">
+      ${ro ? '' : `<form class="panel" id="lv-form">
         <h2>บันทึกใหม่</h2>
         <div class="grid2">
           <label class="f">เจ้าหน้าที่<select name="staff_id" required>${staff.map((s) => `<option value="${s.id}">${esc(s.full_name)}</option>`).join('')}</select></label>
@@ -526,19 +535,20 @@
           <label class="f" style="grid-column:1/-1">รายละเอียด (ไม่บังคับ)<input name="note" placeholder="เช่น ลาป่วย, ประชุมที่ สสอ.โพธิ์ไทร"></label>
         </div>
         <button class="btn" type="submit" style="margin-top:12px">บันทึก</button>
-      </form>
+      </form>`}
       <div class="panel">
         <div class="head" style="margin-bottom:8px"><h2 style="margin:0">รายการเดือนนี้</h2>
           <label class="f">เดือน<input type="month" id="month" value="${month}"></label></div>
         <div class="tbl-wrap"><table class="data"><thead><tr><th>วันที่</th><th>เจ้าหน้าที่</th><th>ประเภท</th><th>รายละเอียด</th><th></th></tr></thead><tbody>
           ${leaves.map((l) => `<tr><td>${thaiDate(l.day, { weekday: 'short' })}</td><td>${esc(nameOf[l.staff_id] || '—')}</td>
             <td><span class="tag ${l.kind === 'official' ? 'away' : 'none'}">${LEAVE[l.kind]}</span></td><td>${esc(l.note)}</td>
-            <td><button class="btn danger" type="button" data-del="${l.id}">ลบ</button></td></tr>`).join('') ||
+            <td>${ro ? '' : `<button class="btn danger" type="button" data-del="${l.id}">ลบ</button>`}</td></tr>`).join('') ||
             '<tr><td colspan="5" class="muted">ยังไม่มีรายการในเดือนนี้</td></tr>'}
         </tbody></table></div>
       </div>`);
 
     document.getElementById('month').onchange = (e) => { if (e.target.value) location.hash = '#/leave?m=' + e.target.value; };
+    if (ro) return;
     document.getElementById('lv-form').onsubmit = async (ev) => {
       ev.preventDefault();
       const f = ev.target, btn = f.querySelector('button[type=submit]');
