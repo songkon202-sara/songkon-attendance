@@ -42,11 +42,12 @@
     monthly: { title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
     leave: { title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
     settings: { title: 'ตั้งค่า', admin: true, render: viewSettings },
+    checkin: { title: 'ลงเวลา (มือถือ)', admin: false, render: viewCheckin },
     me: { title: 'เวลาของฉัน', admin: false, render: viewMe }
   };
 
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'monthly', 'staff', 'leave', 'settings', 'me'] : ['me'];
+    const keys = isAdmin() ? ['sheet', 'monthly', 'staff', 'leave', 'settings', 'checkin', 'me'] : ['checkin', 'me'];
     document.getElementById('nav').innerHTML = keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
   }
@@ -54,8 +55,9 @@
   async function route() {
     if (!state.user) return viewLogin();
     if (!state.me) return viewPending();
-    let key = (location.hash.replace(/^#\/?/, '').split('?')[0]) || (isAdmin() ? 'sheet' : 'me');
-    if (!ROUTES[key] || (ROUTES[key].admin && !isAdmin())) key = isAdmin() ? 'sheet' : 'me';
+    let key = (location.hash.replace(/^#\/?/, '').split('?')[0]) || (isAdmin() ? 'sheet' : 'checkin');
+    if (!ROUTES[key] || (ROUTES[key].admin && !isAdmin())) key = isAdmin() ? 'sheet' : 'checkin';
+    if (key !== 'checkin') stopCamera();
     document.title = ROUTES[key].title + ' · ระบบลงเวลา รพ.สต.สองคอน';
     renderNav(key);
     try { await ROUTES[key].render(); } catch (e) { fail(e); }
@@ -139,11 +141,12 @@
   async function viewSheet() {
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     const day = params.get('d') || todayISO();
-    const [rows, sumRows, settings, sync] = await Promise.all([
+    const [rows, sumRows, settings, sync, mob] = await Promise.all([
       q(sb.rpc('daily_sheet', { p_day: day })),
       q(sb.rpc('daily_summary', { p_day: day })),
       q(sb.from('settings').select('*').eq('id', 1).single()),
-      q(sb.from('device_sync').select('*').eq('id', 1).maybeSingle())
+      q(sb.from('device_sync').select('*').eq('id', 1).maybeSingle()),
+      q(sb.rpc('mobile_logs', { p_day: day })).catch(() => [])
     ]);
     state.settings = settings;
     const s = sumRows[0] || {};
@@ -202,7 +205,27 @@
         </div>
         <div class="sign">ผู้ตรวจ ..................................................<br>(หัวหน้าหน่วยงานผู้รับผิดชอบงานการเจ้าหน้าที่)</div>
         <div class="sheet-foot">ช่องทาง: ใบหน้า / ลายนิ้วมือ / รหัส / บัตร (เครื่องสแกน) · มือถือ · พิมพ์จากระบบเมื่อ ${thaiDateTime(new Date().toISOString())}</div>
-      </article>`);
+      </article>
+      ${mob.length ? `
+      <div class="panel no-print" style="margin-top:18px">
+        <h2>ลงเวลาผ่านมือถือ (${mob.length})</h2>
+        <div class="mob-grid">${mob.map((m, i) => `
+          <figure class="mob">
+            <img data-selfie="${esc(m.selfie_path || '')}" alt="รูปยืนยันของ ${esc(m.full_name)}" width="120" height="90">
+            <figcaption><b>${esc(m.full_name)}</b><br>
+              ${new Date(m.log_time).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false })}
+              ${m.direction === 'out' ? 'กลับ' : 'มา'} ·
+              ${m.in_area ? `ในพื้นที่ (${m.distance_m} ม.)` : `<span class="tag away">นอกพื้นที่ ${m.distance_m >= 1000 ? (m.distance_m / 1000).toFixed(1) + ' กม.' : m.distance_m + ' ม.'}</span> ${esc(m.reason || '')}`}
+              ${m.face_score != null ? `<br><span class="muted">ความต่างใบหน้า ${Number(m.face_score).toFixed(2)}</span>` : ''}
+            </figcaption>
+          </figure>`).join('')}</div>
+      </div>` : ''}`);
+    const imgs = [...$app.querySelectorAll('img[data-selfie]')].filter((im) => im.dataset.selfie);
+    if (imgs.length) {
+      sb.storage.from('selfies').createSignedUrls(imgs.map((im) => im.dataset.selfie), 600).then(({ data }) => {
+        (data || []).forEach((d, i) => { if (d.signedUrl) imgs[i].src = d.signedUrl; });
+      });
+    }
 
     const go = (d) => { location.hash = '#/sheet?d=' + d; };
     const shift = (n) => { const t = new Date(day + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); go(t.toISOString().slice(0, 10)); };
@@ -214,15 +237,17 @@
 
   // ---------------------------------------------------------------- เจ้าหน้าที่
   async function viewStaff() {
-    const [staff, users, emails, unmatched, people, settings, counts] = await Promise.all([
+    const [staff, users, emails, unmatched, people, settings, counts, faces] = await Promise.all([
       q(sb.from('staff').select('*').order('sort_order').order('full_name')),
       q(sb.rpc('list_unlinked_users')),
       q(sb.rpc('staff_emails')),
       q(sb.from('hip_unmatched_summary').select('*').order('enroll_number')),
       q(sb.from('hip_people').select('enroll_number')),
       q(sb.from('settings').select('positions').eq('id', 1).single()),
-      q(sb.rpc('staff_scan_counts'))
+      q(sb.rpc('staff_scan_counts')),
+      q(sb.rpc('face_status')).catch(() => [])
     ]);
+    const hasFace = new Set(faces.map((f) => f.staff_id));
     const emailOf = Object.fromEntries(emails.map((e) => [e.staff_id, e.email]));
     const scansOf = Object.fromEntries(counts.map((c) => [c.staff_id, Number(c.scans)]));
     const positions = settings.positions || [];
@@ -235,7 +260,7 @@
     const rowHtml = (s, i) => `
       <tr>
         <td>${i + 1}</td>
-        <td><b>${esc(s.full_name)}</b>${s.on_sheet ? '' : ' <span class="tag none">ไม่แสดงในใบบัญชี</span>'}</td>
+        <td><b>${esc(s.full_name)}</b>${s.on_sheet ? '' : ' <span class="tag none">ไม่แสดงในใบบัญชี</span>'}${hasFace.has(s.id) ? ' <span class="tag" title="ลงทะเบียนใบหน้าสำหรับลงเวลาผ่านมือถือแล้ว">ใบหน้า ✓</span>' : ''}</td>
         <td>${esc(s.position || '—')}</td>
         <td>${esc(TYPE[s.staff_type] || '')}</td>
         <td>${esc(s.hip_user_id || '—')}</td>
@@ -295,6 +320,10 @@
             <label class="f" style="grid-column:1/-1">บัญชีล็อกอิน<select name="link"></select></label>
             <label class="check" style="grid-column:1/-1"><input type="checkbox" name="on_sheet"> แสดงในใบบัญชีลงเวลา</label>
           </div>
+          <div id="face-row" class="row" style="margin-top:6px" hidden>
+            <span class="muted" style="font-size:14px">ลงทะเบียนใบหน้าแล้ว (ลงเวลาผ่านมือถือ)</span>
+            <button class="btn danger" type="button" id="face-reset">รีเซ็ตใบหน้า</button>
+          </div>
           <p class="err" id="dlg-err" role="alert"></p>
           <div class="row" style="justify-content:flex-end;margin-top:8px">
             <button class="btn quiet" type="button" id="dlg-cancel">ยกเลิก</button>
@@ -322,10 +351,15 @@
       f.link.innerHTML = (cur ? `<option value="">${esc(cur)} (ผูกอยู่)</option>` : '<option value="">— ไม่ผูกบัญชี —</option>') +
         users.map((u) => `<option value="${u.user_id}">${esc(u.email)}</option>`).join('');
       f.link.disabled = !users.length;
+      document.getElementById('face-row').hidden = !(s && hasFace.has(s.id));
       dlg.showModal();
       f.full_name.focus();
     }
     document.getElementById('dlg-cancel').onclick = () => dlg.close();
+    document.getElementById('face-reset').onclick = async () => {
+      if (!editing || !confirm(`รีเซ็ตใบหน้าของ "${editing.full_name}"?\nเจ้าหน้าที่ต้องลงทะเบียนใบหน้าใหม่ก่อนลงเวลาผ่านมือถือครั้งถัดไป`)) return;
+      try { await q(sb.rpc('reset_face', { p_staff_id: editing.id })); dlg.close(); toast('รีเซ็ตใบหน้าแล้ว'); route(); } catch (e) { fail(e); }
+    };
     f.onsubmit = async (ev) => {
       ev.preventDefault();
       const err = document.getElementById('dlg-err'), btn = document.getElementById('dlg-save');
@@ -619,6 +653,196 @@
         toast('ส่งแล้ว กำลังรอคำตอบจาก Telegram…');
         setTimeout(tgRefresh, 4000);
       } catch (e) { fail(e); } finally { busy(b, false); }
+    };
+  }
+
+  // ---------------------------------------------------------------- ลงเวลาผ่านมือถือ
+  const FACE_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13';
+  let camStream = null, geoWatch = null;
+  function stopCamera() {
+    if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+    if (geoWatch !== null) { navigator.geolocation.clearWatch(geoWatch); geoWatch = null; }
+  }
+  async function loadFaceApi(status) {
+    if (window.faceapi && loadFaceApi.ready) return;
+    status('กำลังโหลดตัวตรวจใบหน้า (ครั้งแรกประมาณ 10 วินาที)…');
+    await loadScript(FACE_CDN + '/dist/face-api.js');
+    const m = FACE_CDN + '/model';
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(m),
+      faceapi.nets.faceLandmark68Net.loadFromUri(m),
+      faceapi.nets.faceRecognitionNet.loadFromUri(m)
+    ]);
+    loadFaceApi.ready = true;
+  }
+  async function startCamera(video) {
+    if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    video.srcObject = camStream;
+    await video.play();
+  }
+  async function readFace(video) {
+    const r = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+      .withFaceLandmarks().withFaceDescriptor();
+    return r ? Array.from(r.descriptor) : null;
+  }
+  function snapJpeg(video) {
+    const w = 480, h = Math.round(w * (video.videoHeight || 480) / (video.videoWidth || 640));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); g.translate(w, 0); g.scale(-1, 1); g.drawImage(video, 0, 0, w, h);
+    return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.7));
+  }
+  function distM(lat1, lng1, lat2, lng2) {
+    const R = 6371000, rad = (x) => x * Math.PI / 180;
+    const a = Math.sin(rad(lat2 - lat1) / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(rad(lng2 - lng1) / 2) ** 2;
+    return Math.round(2 * R * Math.asin(Math.sqrt(a)));
+  }
+
+  async function viewCheckin() {
+    const [faces, settings, mine] = await Promise.all([
+      q(sb.rpc('face_status')),
+      q(sb.from('settings').select('site_lat, site_lng, radius_m, face_threshold').eq('id', 1).single()),
+      q(sb.from('attendance_logs').select('log_time, method, in_area, reason')
+        .eq('staff_id', state.me.id).gte('log_time', todayISO() + 'T00:00:00+07:00').order('log_time'))
+    ]);
+    const registered = faces.some((f) => f.staff_id === state.me.id);
+    const tm = (ts) => new Date(ts).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
+    const todayList = mine.length ? mine.map((l) => `<li>${tm(l.log_time)} · ${METHOD[l.method]}${l.in_area === false ? ' · <span class="tag away">นอกพื้นที่</span>' : ''}</li>`).join('') : '<li class="muted">ยังไม่ได้ลงเวลาวันนี้</li>';
+
+    if (!registered) return viewFaceRegister();
+
+    setView(`
+      <div class="checkin">
+        <h1>ลงเวลา</h1>
+        <p class="muted">${thaiDate(todayISO(), { weekday: 'long' })}</p>
+        <div class="seg" role="radiogroup" aria-label="ประเภท">
+          <button type="button" role="radio" aria-checked="true" data-dir="in">ลงเวลามา</button>
+          <button type="button" role="radio" aria-checked="false" data-dir="out">ลงเวลากลับ</button>
+        </div>
+        <div class="cam"><video id="cam" playsinline muted></video><div class="cam-ring"></div><p id="cam-msg">กำลังเปิดกล้อง…</p></div>
+        <div class="panel checks">
+          <div><span>ตำแหน่ง</span><b id="gps-msg">กำลังหาตำแหน่ง…</b></div>
+          <label class="f" id="reason-box" hidden>เหตุผลที่ลงเวลานอกพื้นที่
+            <select id="reason"><option value="">— เลือก —</option><option>ไปราชการ / ประชุม</option><option>ออกเยี่ยมบ้าน / ชุมชน</option><option>อบรม</option><option>อื่น ๆ</option></select>
+          </label>
+        </div>
+        <button class="btn big" type="button" id="go" disabled>ยืนยันลงเวลามา</button>
+        <p class="err" id="ck-err" role="alert"></p>
+        <div class="panel"><h2>วันนี้</h2><ul class="plain">${todayList}</ul></div>
+      </div>`);
+
+    let dir = 'in', pos = null;
+    const go = document.getElementById('go'), msg = (t) => { document.getElementById('cam-msg').textContent = t; };
+    const err = document.getElementById('ck-err');
+    $app.querySelectorAll('[data-dir]').forEach((b) => b.onclick = () => {
+      dir = b.dataset.dir;
+      $app.querySelectorAll('[data-dir]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      go.textContent = dir === 'in' ? 'ยืนยันลงเวลามา' : 'ยืนยันลงเวลากลับ';
+    });
+
+    // GPS
+    const gpsMsg = document.getElementById('gps-msg'), reasonBox = document.getElementById('reason-box');
+    if (!navigator.geolocation) gpsMsg.textContent = 'เครื่องนี้ไม่รองรับ GPS';
+    else geoWatch = navigator.geolocation.watchPosition((p) => {
+      pos = p.coords;
+      const d = distM(settings.site_lat, settings.site_lng, pos.latitude, pos.longitude);
+      const inside = d <= settings.radius_m;
+      gpsMsg.innerHTML = inside ? `<span style="color:var(--green)">ในพื้นที่ · ห่าง ${d} ม.</span>`
+        : `<span style="color:var(--late)">นอกพื้นที่ · ห่าง ${d >= 1000 ? (d / 1000).toFixed(1) + ' กม.' : d + ' ม.'}</span>`;
+      reasonBox.hidden = inside;
+      go.disabled = !loadFaceApi.ready;
+    }, (e) => { gpsMsg.textContent = e.code === 1 ? 'ไม่ได้อนุญาตตำแหน่ง — เปิดสิทธิ์ Location ให้เบราว์เซอร์' : 'หาตำแหน่งไม่ได้ ลองออกไปที่โล่ง'; },
+    { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+
+    // Camera + face model
+    const video = document.getElementById('cam');
+    try {
+      await startCamera(video);
+      await loadFaceApi(msg);
+      msg('วางใบหน้าให้อยู่ในกรอบ');
+      if (pos) go.disabled = false;
+    } catch (e) {
+      msg('เปิดกล้องไม่ได้');
+      err.textContent = /Permission|NotAllowed/i.test(e.name + e.message) ? 'ไม่ได้อนุญาตกล้อง — เปิดสิทธิ์ Camera ให้เบราว์เซอร์แล้วรีเฟรช' : e.message;
+      return;
+    }
+
+    go.onclick = async () => {
+      err.textContent = '';
+      if (!pos) { err.textContent = 'ยังหาตำแหน่งไม่ได้'; return; }
+      const d = distM(settings.site_lat, settings.site_lng, pos.latitude, pos.longitude);
+      const reason = document.getElementById('reason').value;
+      if (d > settings.radius_m && !reason) { err.textContent = 'ลงเวลานอกพื้นที่ ต้องเลือกเหตุผล'; return; }
+      busy(go, true); msg('กำลังตรวจใบหน้า…');
+      try {
+        const desc = await readFace(video);
+        if (!desc) throw new Error('ไม่พบใบหน้า — หันหน้าตรง ให้มีแสงพอ แล้วลองอีกครั้ง');
+        const tpl = await q(sb.from('face_templates').select('descriptor').eq('staff_id', state.me.id));
+        const score = Math.min(...tpl.map((t) => faceapi.euclideanDistance(desc, t.descriptor)));
+        if (!(score <= settings.face_threshold)) throw new Error('ใบหน้าไม่ตรงกับที่ลงทะเบียนไว้ (ค่า ' + score.toFixed(2) + ') ลองอีกครั้ง หรือให้ผู้ดูแลรีเซ็ตใบหน้า');
+        msg('กำลังบันทึก…');
+        const blob = await snapJpeg(video);
+        const path = `${state.me.id}/${todayISO()}/${Date.now()}-${dir}.jpg`;
+        const up = await sb.storage.from('selfies').upload(path, blob, { contentType: 'image/jpeg' });
+        if (up.error) throw up.error;
+        const rec = await q(sb.rpc('mobile_check_in', {
+          p_direction: dir, p_lat: pos.latitude, p_lng: pos.longitude,
+          p_reason: d > settings.radius_m ? reason : null, p_selfie_path: path, p_face_score: Number(score.toFixed(3))
+        }));
+        stopCamera();
+        setView(`<div class="checkin done"><div class="ok-mark" aria-hidden="true">✓</div>
+          <h1>${dir === 'in' ? 'ลงเวลามาแล้ว' : 'ลงเวลากลับแล้ว'}</h1>
+          <p class="big-time">${tm(rec.log_time)}</p>
+          <p>${rec.in_area ? 'ในพื้นที่ รพ.สต.' : 'นอกพื้นที่ · ' + esc(rec.reason || '')}</p>
+          <a class="btn quiet" href="#/me">ดูเวลาของฉัน</a></div>`);
+      } catch (e) {
+        err.textContent = e.message; msg('วางใบหน้าให้อยู่ในกรอบ'); busy(go, false);
+      }
+    };
+  }
+
+  async function viewFaceRegister() {
+    setView(`
+      <div class="checkin">
+        <h1>ลงทะเบียนใบหน้า</h1>
+        <p class="muted">ทำครั้งเดียว ก่อนเริ่มลงเวลาผ่านมือถือ</p>
+        <div class="panel" style="background:#FFF8EC;border-color:#EAD3A8">
+          <b>การเก็บข้อมูลใบหน้า</b>
+          <p style="margin:6px 0 8px">ระบบเก็บเฉพาะค่าตัวเลขของใบหน้า (ไม่เก็บรูป) เพื่อยืนยันตัวตนตอนลงเวลาเท่านั้น ส่วนรูปถ่ายตอนลงเวลาแต่ละครั้งผู้ดูแลระบบดูได้เพื่อตรวจสอบ ขอลบข้อมูลได้เมื่อพ้นจากหน่วยงาน</p>
+          <label class="check"><input type="checkbox" id="consent"> ข้าพเจ้ายินยอมให้เก็บข้อมูลใบหน้า</label>
+        </div>
+        <div class="cam" hidden id="cam-wrap"><video id="cam" playsinline muted></video><div class="cam-ring"></div><p id="cam-msg"></p></div>
+        <p class="steps" id="steps" hidden></p>
+        <button class="btn big" type="button" id="start" disabled>เริ่มถ่ายใบหน้า</button>
+        <p class="err" id="rg-err" role="alert"></p>
+      </div>`);
+    const consent = document.getElementById('consent'), start = document.getElementById('start'), err = document.getElementById('rg-err');
+    consent.onchange = () => { start.disabled = !consent.checked; };
+    const prompts = ['มองตรงที่กล้อง', 'หันหน้าไปทางซ้ายเล็กน้อย', 'หันหน้าไปทางขวาเล็กน้อย'];
+    start.onclick = async () => {
+      err.textContent = ''; busy(start, true);
+      const video = document.getElementById('cam'), msg = (t) => { document.getElementById('cam-msg').textContent = t; };
+      document.getElementById('cam-wrap').hidden = false;
+      try {
+        await startCamera(video);
+        await loadFaceApi(msg);
+        const shots = [];
+        const steps = document.getElementById('steps'); steps.hidden = false;
+        for (let i = 0; i < prompts.length; i++) {
+          steps.textContent = `ภาพที่ ${i + 1}/3: ${prompts[i]}`;
+          msg(prompts[i]);
+          await new Promise((r) => setTimeout(r, 1800));
+          let d = null;
+          for (let tries = 0; tries < 8 && !d; tries++) { d = await readFace(video); if (!d) await new Promise((r) => setTimeout(r, 400)); }
+          if (!d) throw new Error('ไม่พบใบหน้าในภาพที่ ' + (i + 1) + ' — ให้มีแสงพอ แล้วกดเริ่มใหม่');
+          shots.push(d);
+        }
+        msg('กำลังบันทึก…');
+        await q(sb.rpc('register_my_face', { p_descriptors: shots }));
+        stopCamera();
+        toast('ลงทะเบียนใบหน้าแล้ว');
+        route();
+      } catch (e) { err.textContent = e.message; busy(start, false); }
     };
   }
 
