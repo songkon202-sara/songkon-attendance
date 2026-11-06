@@ -292,7 +292,8 @@
         <td><b>${esc(s.full_name)}</b>${s.on_sheet ? '' : ' <span class="tag none">ไม่แสดงในใบบัญชี</span>'}${hasFace.has(s.id) ? ' <span class="tag" title="ลงทะเบียนใบหน้าสำหรับลงเวลาผ่านมือถือแล้ว">ใบหน้า ✓</span>' : ''}</td>
         <td>${esc(s.position || '—')}</td>
         <td>${esc(TYPE[s.staff_type] || '')}</td>
-        <td>${esc(s.hip_user_id || '—')}</td>
+        <td>${esc(s.emp_code || '—')}</td>
+        <td>${s.hip_user_id ? esc(s.hip_user_id) : '<span class="muted">—</span>'}</td>
         <td>${s.role === 'staff' ? 'เจ้าหน้าที่' : `<span class="tag${s.role === 'viewer' ? ' away' : ''}">${s.role === 'admin' ? 'ผู้ดูแล' : 'ผู้บริหาร'}</span>`}</td>
         <td>${emailOf[s.id] ? esc(emailOf[s.id]) : '<span class="muted">—</span>'}</td>
         <td class="actions">${ro ? '' : `
@@ -311,16 +312,16 @@
       ${unmatched.length && !ro ? `
       <div class="panel" style="border-color:#EAD3A8;background:#FFF8EC">
         <h2>รายการสแกนที่ยังไม่รู้ว่าเป็นใคร</h2>
-        <p class="muted">กด "แก้ไข" ที่เจ้าหน้าที่คนนั้น ใส่รหัสในช่อง "รหัสในเครื่องสแกน" แล้วกด "ย้ายรายการค้าง"</p>
-        <div class="tbl-wrap"><table class="data"><thead><tr><th>รหัสในเครื่องสแกน</th><th>ชื่อในเครื่อง</th><th>จำนวน</th><th>ล่าสุด</th></tr></thead><tbody>
+        <p class="muted">กด "แก้ไข" ที่เจ้าหน้าที่คนนั้น ใส่เลขในช่อง "เลขในเครื่องสแกน" แล้วกด "ย้ายรายการค้าง"</p>
+        <div class="tbl-wrap"><table class="data"><thead><tr><th>เลขในเครื่องสแกน</th><th>ชื่อในเครื่อง</th><th>จำนวน</th><th>ล่าสุด</th></tr></thead><tbody>
           ${unmatched.map((u) => `<tr><td>${esc(u.enroll_number)}</td><td>${esc(u.hip_name || '—')}</td><td>${u.scans}</td><td>${thaiDateTime(u.last_scan)}</td></tr>`).join('')}
         </tbody></table></div>
         <button class="btn quiet" type="button" id="rematch" style="margin-top:10px">ย้ายรายการค้าง</button>
       </div>` : ''}
       <div class="panel tbl-wrap">
         <table class="data">
-          <thead><tr><th>ลำดับ</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th>ประเภท</th><th>รหัสสแกน</th><th>สิทธิ์</th><th>บัญชีล็อกอิน</th><th></th></tr></thead>
-          <tbody>${active.map(rowHtml).join('') || '<tr><td colspan="8" class="muted">ยังไม่มีเจ้าหน้าที่ กด "เพิ่มเจ้าหน้าที่"</td></tr>'}</tbody>
+          <thead><tr><th>ลำดับ</th><th>ชื่อ-สกุล</th><th>ตำแหน่ง</th><th>ประเภท</th><th>รหัส</th><th title="เลขของคนนี้ในเครื่องสแกน ใช้จับคู่เวลาที่สแกน">เลขในเครื่องสแกน</th><th>สิทธิ์</th><th>บัญชีล็อกอิน</th><th></th></tr></thead>
+          <tbody>${active.map(rowHtml).join('') || '<tr><td colspan="9" class="muted">ยังไม่มีเจ้าหน้าที่ กด "เพิ่มเจ้าหน้าที่"</td></tr>'}</tbody>
         </table>
       </div>
       ${inactive.length ? `
@@ -343,7 +344,8 @@
               <datalist id="pos-list">${positions.map((p) => `<option value="${esc(p)}"></option>`).join('')}</datalist>
             </label>
             <label class="f">ประเภท<select name="staff_type">${opt(TYPE, 'civil')}</select></label>
-            <label class="f">รหัสในเครื่องสแกน<input name="hip_user_id" inputmode="numeric" placeholder="เช่น 5"></label>
+            <label class="f">รหัสพนักงาน<input name="emp_code" inputmode="numeric" placeholder="เช่น 01"></label>
+            <label class="f">เลขในเครื่องสแกน<input name="hip_user_id" inputmode="numeric" placeholder="เลขที่ใช้ในเครื่อง เช่น 1"></label>
             <label class="f">ลำดับในใบบัญชี<input name="sort_order" type="number" min="0"></label>
             <label class="f">สิทธิ์<select name="role">${opt(ROLE, 'staff')}</select></label>
             <label class="f" style="grid-column:1/-1">บัญชีล็อกอิน<select name="link"></select></label>
@@ -374,6 +376,7 @@
       f.position.value = s ? (s.position || '') : '';
       f.staff_type.value = s ? s.staff_type : 'civil';
       f.hip_user_id.value = s ? (s.hip_user_id || '') : '';
+      f.emp_code.value = s ? (s.emp_code || '') : '';
       f.sort_order.value = s ? s.sort_order : maxOrder + 1;
       f.role.value = s ? s.role : 'staff';
       f.on_sheet.checked = s ? s.on_sheet : true;
@@ -398,13 +401,17 @@
         position: f.position.value.trim() || null,
         staff_type: f.staff_type.value,
         hip_user_id: f.hip_user_id.value.trim() || null,
+        emp_code: f.emp_code.value.trim() || null,
         sort_order: Number(f.sort_order.value) || 0,
         role: f.role.value,
         on_sheet: f.on_sheet.checked
       };
       if (!patch.full_name) { err.textContent = 'กรอกชื่อ-สกุล'; return; }
       if (patch.hip_user_id && staff.some((x) => x.hip_user_id === patch.hip_user_id && (!editing || x.id !== editing.id))) {
-        err.textContent = 'รหัสในเครื่องสแกนนี้ใช้กับเจ้าหน้าที่คนอื่นแล้ว'; return;
+        err.textContent = 'เลขในเครื่องสแกนนี้ใช้กับเจ้าหน้าที่คนอื่นแล้ว'; return;
+      }
+      if (patch.emp_code && staff.some((x) => x.emp_code === patch.emp_code && (!editing || x.id !== editing.id))) {
+        err.textContent = 'รหัสพนักงานนี้ใช้กับเจ้าหน้าที่คนอื่นแล้ว'; return;
       }
       if (editing && editing.id === state.me.id && patch.role !== 'admin' &&
           !confirm('ถ้าเปลี่ยนสิทธิ์ของตัวเองเป็น "' + ROLE[patch.role] + '" จะแก้ไขข้อมูลไม่ได้อีก ยืนยันไหม')) return;
@@ -883,7 +890,7 @@
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     const month = params.get('m') || todayISO().slice(0, 7);
     const pick = canView();
-    const people = pick ? await q(sb.from('staff').select('id, full_name, hip_user_id').eq('is_active', true).order('sort_order').order('full_name')) : [];
+    const people = pick ? await q(sb.from('staff').select('id, full_name, hip_user_id, emp_code').eq('is_active', true).order('sort_order').order('full_name')) : [];
     const who = (pick && people.find((p) => p.id === params.get('s'))) || state.me;
     const start = month + '-01T00:00:00+07:00';
     const endD = new Date(month + '-01T12:00:00Z'); endD.setUTCMonth(endD.getUTCMonth() + 1);
@@ -911,8 +918,8 @@
         <td>${ls.some((x) => x.in_area === false) ? '<span class="tag away">นอกพื้นที่</span>' : ''}</td>
         <td class="muted" style="font-size:14px">${ls.length > 2 ? ls.map((x) => `${tm(x.log_time)} ${METHOD[x.method]}`).join(', ') : ''}</td></tr>`;
     }).join('');
-    const scanNote = who.hip_user_id ? `รหัสในเครื่องสแกน ${esc(who.hip_user_id)}`
-      : `<span class="tag late">ยังไม่ได้ใส่รหัสเครื่องสแกน</span> เวลาที่สแกนที่เครื่องจะยังไม่ขึ้น${isAdmin() ? ' — ใส่ได้ที่เมนูเจ้าหน้าที่' : ' — แจ้งผู้ดูแลระบบ'}`;
+    const scanNote = who.hip_user_id ? `${who.emp_code ? 'รหัส ' + esc(who.emp_code) + ' · ' : ''}เลขในเครื่องสแกน ${esc(who.hip_user_id)}`
+      : `<span class="tag late">ยังไม่ได้ใส่เลขในเครื่องสแกน</span> เวลาที่สแกนที่เครื่องจะยังไม่ขึ้น${isAdmin() ? ' — ใส่ได้ที่เมนูเจ้าหน้าที่' : ' — แจ้งผู้ดูแลระบบ'}`;
     const nowTxt = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
     setView(`
       <div class="head"><div><h1>${who.id === state.me.id ? 'เวลาของฉัน' : 'เวลาของ ' + esc(who.full_name)}</h1>

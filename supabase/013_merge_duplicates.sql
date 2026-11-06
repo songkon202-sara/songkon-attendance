@@ -2,13 +2,17 @@
 -- 013 — รวมรายชื่อซ้ำ + ใช้รหัสให้ตรงกับเครื่องสแกน
 --   • ชื่อเดียวกันมี 2 แถว → เก็บแถวที่ข้อมูลครบ (มีตำแหน่ง/ผูกบัญชี/ลำดับต้น)
 --     ย้ายประวัติสแกน วันลา ใบหน้า มาไว้ที่แถวนั้น แล้วลบแถวซ้ำ
---   • รหัสสแกน = เลขที่ใช้จริงในเครื่องสแกน (จากแถวซ้ำที่นำเข้าจากเครื่อง หรือจับคู่จากชื่อในเครื่อง)
+--   • รหัสพนักงาน (01–10 ที่ตั้งไว้) เก็บไว้ในช่องใหม่ emp_code — แสดงในหน้าเว็บเหมือนเดิม
+--   • ช่องเลขในเครื่องสแกน (hip_user_id) = เลขที่ใช้จริงในเครื่อง ระบบใช้จับคู่เวลาให้อัตโนมัติ
 --   • ย้ายรายการสแกนที่ค้าง (ยังไม่รู้ว่าเป็นใคร) เข้าคนที่จับคู่ได้
 --
 -- วิธีใช้ใน Supabase SQL Editor (รันไฟล์นี้ก่อน 1 ครั้ง)
 --   ดูก่อน (ยังไม่แก้อะไร):  select * from songkon_merge(false);
 --   ทำจริง:                select * from songkon_merge(true);
 -- =====================================================================
+
+-- รหัสพนักงานที่ รพ.สต. ตั้งเอง (แยกจากเลขในเครื่องสแกน)
+alter table staff add column if not exists emp_code text unique;
 
 -- ชื่อแบบตัดคำนำหน้าและช่องว่าง ใช้เทียบว่าเป็นคนเดียวกัน
 create or replace function norm_name(p text) returns text
@@ -18,8 +22,9 @@ language sql immutable as $$
            '\s+', '', 'g');
 $$;
 
+drop function if exists songkon_merge(boolean);
 create or replace function songkon_merge(p_apply boolean default false)
-returns table (ชื่อ text, ตำแหน่ง text, รหัสเดิม text, รหัสใหม่ text, แถวซ้ำที่ลบ int, สแกนที่ย้าย int, หมายเหตุ text)
+returns table (ชื่อ text, ตำแหน่ง text, รหัสพนักงาน text, เลขในเครื่องสแกน text, แถวซ้ำที่ลบ int, สแกนที่ย้าย int, หมายเหตุ text)
 language plpgsql security definer set search_path = public as $$
 declare
   k record; d record;
@@ -46,7 +51,7 @@ begin
     if new_code is null and exists (select 1 from hip_people where enroll_number = k.hip_user_id) then
       new_code := k.hip_user_id;
     end if;
-    if new_code is null then note := 'ไม่พบชื่อนี้ในเครื่องสแกน — ใส่รหัสเองภายหลัง'; end if;
+    if new_code is null then note := 'ไม่พบชื่อนี้ในเครื่องสแกน — ใส่เลขเองภายหลัง'; end if;
 
     -- 2) แถวซ้ำ
     for d in select s.* from staff s
@@ -71,13 +76,19 @@ begin
       end if;
     end loop;
 
-    -- 3) ตั้งรหัสใหม่ (ปลดรหัสนี้จากคนอื่นก่อน)
+    -- 3) เก็บรหัสที่ตั้งไว้ (01–10) เป็นรหัสพนักงาน แล้วตั้งเลขในเครื่องสแกน (ปลดเลขนี้จากคนอื่นก่อน)
+    if p_apply and k.emp_code is null and k.hip_user_id is not null
+       and not exists (select 1 from hip_people where enroll_number = k.hip_user_id) then
+      update staff set emp_code = k.hip_user_id where id = k.id;
+    end if;
     if p_apply and coalesce(new_code, '') is distinct from coalesce(k.hip_user_id, '') then
       update staff set hip_user_id = null where hip_user_id = new_code and id <> k.id;
       update staff set hip_user_id = new_code where id = k.id;
     end if;
 
-    ชื่อ := k.full_name; ตำแหน่ง := k.position; รหัสเดิม := k.hip_user_id; รหัสใหม่ := new_code;
+    ชื่อ := k.full_name; ตำแหน่ง := k.position;
+    รหัสพนักงาน := coalesce(k.emp_code, case when not exists (select 1 from hip_people where enroll_number = k.hip_user_id) then k.hip_user_id end);
+    เลขในเครื่องสแกน := new_code;
     แถวซ้ำที่ลบ := n_dup; สแกนที่ย้าย := n_logs; หมายเหตุ := note;
     return next;
   end loop;
