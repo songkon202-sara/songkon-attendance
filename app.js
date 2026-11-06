@@ -483,7 +483,15 @@
           ${field('ot_end', 'เลิก', 'time')}
           ${field('summary_time2', 'ส่งสรุปเวรนอกเวลาเข้า Telegram', 'time')}
         </div>
-        <button class="btn quiet" type="button" id="tg-test" style="margin-top:10px">ทดสอบส่งข้อความ</button>
+        <div class="panel" style="margin-top:12px;background:var(--ground)">
+          <label class="f">Bot token <span class="muted" style="font-size:13px">สถานะ: <b id="tg-status">กำลังตรวจ…</b></span>
+            <input type="password" id="tg-token" autocomplete="off" placeholder="วาง token จาก @BotFather เช่น 7012345678:AAH…"></label>
+          <div class="row" style="margin-top:8px">
+            <button class="btn quiet" type="button" id="tg-save-token">บันทึก token</button>
+            <button class="btn quiet" type="button" id="tg-test">ทดสอบส่งข้อความ</button>
+          </div>
+          <p class="muted" style="font-size:13px;margin-top:8px">ผลการส่งล่าสุด: <span id="tg-last">—</span></p>
+        </div>
         <h2 style="margin-top:20px">รายการตำแหน่ง</h2>
         <label class="f">หนึ่งบรรทัดต่อหนึ่งตำแหน่ง (ใช้ในช่องเลือกตำแหน่งของหน้าเจ้าหน้าที่)
           <textarea name="positions" rows="8">${esc((s.positions || []).join('\n'))}</textarea></label>
@@ -513,10 +521,27 @@
       try { await q(sb.from('settings').update(patch).eq('id', 1)); toast('บันทึกการตั้งค่าแล้ว'); }
       catch (e) { fail(e); } finally { busy(btn, false); }
     };
+    const tgRefresh = async () => {
+      try {
+        document.getElementById('tg-status').textContent = (await q(sb.rpc('tg_token_status'))) || '—';
+        document.getElementById('tg-last').textContent = (await q(sb.rpc('tg_last_result'))) || '—';
+      } catch (e) { document.getElementById('tg-status').textContent = 'ยังไม่ได้รันไฟล์ 008'; }
+    };
+    tgRefresh();
+    document.getElementById('tg-save-token').onclick = async (ev) => {
+      const b = ev.target, inp = document.getElementById('tg-token');
+      if (!inp.value.trim()) return toast('วาง token ก่อน');
+      busy(b, true);
+      try { await q(sb.rpc('set_tg_token', { p_token: inp.value })); inp.value = ''; toast('บันทึก token แล้ว'); tgRefresh(); }
+      catch (e) { fail(e); } finally { busy(b, false); }
+    };
     document.getElementById('tg-test').onclick = async (ev) => {
       const b = ev.target; busy(b, true);
-      try { await q(sb.rpc('tg_test')); toast('ส่งข้อความทดสอบแล้ว ดูในกลุ่ม Telegram (ถ้าไม่ขึ้น ให้กดบันทึกการตั้งค่าก่อน)'); }
-      catch (e) { fail(e); } finally { busy(b, false); }
+      try {
+        await q(sb.rpc('tg_test'));
+        toast('ส่งแล้ว กำลังรอคำตอบจาก Telegram…');
+        setTimeout(tgRefresh, 4000);
+      } catch (e) { fail(e); } finally { busy(b, false); }
     };
   }
 
