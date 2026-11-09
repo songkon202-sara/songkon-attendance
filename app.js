@@ -43,6 +43,7 @@
   const ROUTES = {
     sheet: { view: true, live: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
     report: { view: true, live: true, title: 'รายงานประจำวัน', admin: true, render: viewReport },
+    usage: { view: true, title: 'ตรวจสอบระบบ', admin: true, render: viewUsage },
     audit: { view: true, title: 'บันทึกการใช้งาน', admin: true, render: viewAudit },
     staff: { view: true, title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
     monthly: { view: true, title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
@@ -55,8 +56,8 @@
   };
 
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'settings', 'audit', 'checkin', 'me']
-      : canView() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'audit', 'checkin', 'me'] : ['checkin', 'me'];
+    const keys = isAdmin() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'settings', 'usage', 'audit', 'checkin', 'me']
+      : canView() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'usage', 'audit', 'checkin', 'me'] : ['checkin', 'me'];
     document.getElementById('nav').innerHTML = keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
   }
@@ -418,6 +419,177 @@
     document.getElementById('au-e').onchange = go;
     document.getElementById('au-n').onchange = go;
     document.getElementById('au-reload').onclick = () => route();
+  }
+
+  // ---------------------------------------------------------------- ตรวจสอบระบบ (ประเภทการยืนยัน + การใช้งานระบบ)
+  async function viewUsage() {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const today = todayISO();
+    let from = params.get('f') || today, to = params.get('t') || today;
+    if (to < from) to = from;
+    const mf = params.get('m') || '';
+    const multi = from !== to;
+    const startTs = new Date(from + 'T00:00:00+07:00').toISOString();
+    const endTs = new Date(new Date(to + 'T00:00:00+07:00').getTime() + 864e5).toISOString();
+    const fetchAll = async (build) => {
+      const out = [];
+      for (let p = 0; p < 10; p++) {
+        const rows = await q(build().range(p * 1000, p * 1000 + 999));
+        out.push(...rows);
+        if (rows.length < 1000) break;
+      }
+      return out;
+    };
+    const [staff, logs, sync, events] = await Promise.all([
+      q(sb.from('staff').select('id, full_name, is_active, sort_order').order('sort_order').order('full_name')),
+      fetchAll(() => sb.from('attendance_logs')
+        .select('id, staff_id, log_time, method, hip_scan_id, hip_verify, direction, in_area, distance_m, face_score, gps_accuracy_m, liveness, created_at')
+        .gte('log_time', startTs).lt('log_time', endTs).order('log_time', { ascending: false })),
+      q(sb.from('device_sync').select('*').eq('id', 1).maybeSingle()),
+      fetchAll(() => sb.from('audit_log').select('at, actor, entity, action')
+        .in('entity', ['auth', 'report']).gte('at', startTs).lt('at', endTs).order('at', { ascending: false })).catch(() => [])
+    ]);
+
+    const ORDER = ['finger', 'face', 'card', 'password', 'mobile', 'other'];
+    const nameOf = Object.fromEntries(staff.map((s) => [s.id, s.full_name]));
+    const when = (ts) => new Date(ts).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    const clock = (ts) => new Date(ts).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const dayOf = (ts) => new Date(new Date(ts).getTime() + 7 * 3600e3).toISOString().slice(0, 10);
+    const dur = (min) => (min < 1 ? '< 1 นาที' : min < 90 ? Math.round(min) + ' นาที' : min < 2880 ? (min / 60).toFixed(1) + ' ชม.' : (min / 1440).toFixed(1) + ' วัน');
+    const cnt = (rows) => { const c = {}; ORDER.forEach((m) => { c[m] = 0; }); rows.forEach((r) => { c[r.method] = (c[r.method] || 0) + 1; }); return c; };
+
+    // ภาพรวม
+    const total = logs.length;
+    const byM = cnt(logs);
+    const tiles = ORDER.filter((m) => byM[m] > 0 || ['finger', 'face', 'mobile'].includes(m)).map((m) =>
+      `<div class="tile${m === 'mobile' ? ' away' : ''}"><b>${byM[m]}</b><span>${METHOD[m]}${total ? ' · ' + Math.round(byM[m] * 100 / total) + '%' : ''}</span></div>`).join('');
+
+    // ความเร็วที่สแกนจากเครื่องเข้าระบบ (เวลาที่บันทึกเข้าระบบ − เวลาที่สแกน)
+    const lags = logs.filter((r) => r.method !== 'mobile').map((r) => (new Date(r.created_at) - new Date(r.log_time)) / 60000).filter((x) => x >= 0).sort((a, b) => a - b);
+    const med = lags.length ? lags[Math.floor(lags.length / 2)] : null;
+    const fast = lags.length ? Math.round(lags.filter((x) => x <= 2).length * 100 / lags.length) : null;
+    const slow = lags.length ? lags[lags.length - 1] : null;
+    const lastScan = logs.find((r) => r.method !== 'mobile');
+    const sinceSync = sync && sync.last_sync_at ? (Date.now() - new Date(sync.last_sync_at)) / 60000 : null;
+
+    // แยกตามคน
+    const per = {};
+    logs.forEach((r) => { (per[r.staff_id] = per[r.staff_id] || []).push(r); });
+    const people = staff.filter((s) => s.is_active || per[s.id]);
+    const perRows = people.map((s) => {
+      const rs = per[s.id] || [];
+      const c = cnt(rs);
+      const first = rs.length ? rs[rs.length - 1].log_time : null;
+      const last = rs.length ? rs[0].log_time : null;
+      return `<tr>
+        <td><b>${esc(s.full_name)}</b></td>
+        ${ORDER.map((m) => `<td class="${c[m] ? '' : 'muted'}" style="text-align:center">${c[m] || '·'}</td>`).join('')}
+        <td style="text-align:center"><b>${rs.length}</b></td>
+        <td class="muted">${first ? (multi ? when(first) : clock(first).slice(0, 5)) : '—'}</td>
+        <td class="muted">${last ? (multi ? when(last) : clock(last).slice(0, 5)) : '—'}</td>
+      </tr>`;
+    }).join('');
+
+    // รายวัน (เมื่อเลือกหลายวัน)
+    let dayRows = '';
+    if (multi) {
+      const dm = {};
+      logs.forEach((r) => { (dm[dayOf(r.log_time)] = dm[dayOf(r.log_time)] || []).push(r); });
+      dayRows = Object.keys(dm).sort().reverse().map((d) => {
+        const c = cnt(dm[d]);
+        return `<tr><td>${thaiDate(d, { weekday: 'short', day: 'numeric', month: 'short' })}</td>${ORDER.map((m) => `<td class="${c[m] ? '' : 'muted'}" style="text-align:center">${c[m] || '·'}</td>`).join('')}<td style="text-align:center"><b>${dm[d].length}</b></td></tr>`;
+      }).join('');
+    }
+
+    // รายการละเอียด
+    const detail = logs.filter((r) => !mf || r.method === mf).slice(0, 300);
+    const detailRows = detail.map((r) => {
+      const lag = r.method === 'mobile' ? null : (new Date(r.created_at) - new Date(r.log_time)) / 60000;
+      const extra = r.method === 'mobile'
+        ? [r.in_area ? `ในพื้นที่ (${r.distance_m} ม.)` : `<span class="tag away">นอกพื้นที่ ${r.distance_m >= 1000 ? (r.distance_m / 1000).toFixed(1) + ' กม.' : r.distance_m + ' ม.'}</span>`,
+          r.face_score != null ? `ใบหน้าต่าง ${Number(r.face_score).toFixed(2)}` : '',
+          r.gps_accuracy_m != null ? `GPS ±${r.gps_accuracy_m} ม.` : '',
+          r.liveness ? 'ผ่านตรวจคนจริง' : ''].filter(Boolean).join(' · ')
+        : (r.hip_scan_id ? `เครื่อง #${r.hip_scan_id}` : '');
+      return `<tr>
+        <td style="white-space:nowrap">${multi ? when(r.log_time).replace(' ', '&nbsp;') : clock(r.log_time)}</td>
+        <td>${esc(nameOf[r.staff_id] || '?')}</td>
+        <td><span class="tag${r.method === 'mobile' ? ' away' : ''}" title="${esc(r.hip_verify || '')}">${esc(METHOD[r.method] || r.method)}</span></td>
+        <td class="muted">${r.direction === 'out' ? 'กลับ' : r.direction === 'in' ? 'มา' : '—'}</td>
+        <td class="muted" style="white-space:nowrap">${lag == null ? '—' : lag > 5 ? `<span class="tag late">${dur(lag)}</span>` : dur(lag)}</td>
+        <td class="muted" style="font-size:14px">${extra}</td>
+      </tr>`;
+    }).join('');
+
+    // การใช้งานระบบ (จากบันทึกการใช้งาน)
+    const use = {};
+    events.forEach((e) => {
+      const u = use[e.actor] = use[e.actor] || { login: 0, print: 0, export: 0, view_audit: 0, last: e.at };
+      if (u[e.action] != null) u[e.action]++;
+      if (e.at > u.last) u.last = e.at;
+    });
+    const useRows = Object.entries(use).sort((a, b) => b[1].last.localeCompare(a[1].last)).map(([n, u]) => `<tr>
+      <td><b>${esc(n)}</b></td><td style="text-align:center">${u.login}</td><td style="text-align:center">${u.print}</td><td style="text-align:center">${u.export}</td><td style="text-align:center">${u.view_audit}</td><td class="muted">${when(u.last)}</td></tr>`).join('');
+
+    const link = (f, t, m) => `#/usage?f=${f}&t=${t}&m=${m || ''}`;
+    const back = (n) => new Date(Date.now() + 7 * 3600e3 - n * 864e5).toISOString().slice(0, 10);
+    setView(`
+      <div class="head"><div><h1>ตรวจสอบระบบ</h1><p class="muted">ดูว่าลงเวลาด้วยวิธีไหน มาถึงระบบเร็วแค่ไหน และใครเข้าใช้ระบบ</p></div>
+        <div class="row">
+          <label class="f">ตั้งแต่<input type="date" id="u-f" value="${from}" max="${today}"></label>
+          <label class="f">ถึง<input type="date" id="u-t" value="${to}" max="${today}"></label>
+          <a class="btn quiet" href="${link(today, today, mf)}">วันนี้</a>
+          <a class="btn quiet" href="${link(back(6), today, mf)}">7 วัน</a>
+          <a class="btn quiet" href="${link(back(29), today, mf)}">30 วัน</a>
+        </div></div>
+
+      <div class="tiles">
+        <div class="tile ok"><b>${total}</b><span>การสแกนทั้งหมด</span></div>
+        ${tiles}
+      </div>
+
+      <div class="panel">
+        <h2>เครื่องสแกนส่งข้อมูลเข้าระบบ</h2>
+        <p>รับสแกนจากเครื่องล่าสุด <b>${thaiDateTime(sync && sync.last_sync_at)}</b>${sinceSync != null ? ` (${dur(sinceSync)}ที่แล้ว)` : ''} ·
+          สแกนล่าสุดจากเครื่อง <b>${lastScan ? thaiDateTime(lastScan.log_time) : '—'}</b>
+          ${sync && sync.last_error ? `<br><span class="tag late">ข้อผิดพลาดล่าสุด</span> ${esc(sync.last_error)}` : ''}</p>
+        ${lags.length ? `<p>ในช่วงนี้ สแกนจากเครื่อง ${lags.length} ครั้ง เข้าระบบภายใน 2 นาที <b>${fast}%</b> · ช้าสุด ${dur(slow)} · ค่ากลาง ${dur(med)}</p>` : '<p class="muted">ยังไม่มีสแกนจากเครื่องในช่วงนี้</p>'}
+        <p class="muted" style="font-size:14px">เวลา "รับล่าสุด" จะขยับเมื่อมีสแกนใหม่เข้ามาเท่านั้น หากไม่มีใครสแกนจึงไม่ขยับ ถ้ามีคนสแกนแล้วนานเกิน 5 นาทีไม่เข้าระบบ ให้ตรวจโปรแกรม HIP Time (หน้า Real Time) บนคอม</p>
+      </div>
+
+      <div class="panel tbl-wrap">
+        <h2>แยกตามคน (ประเภทการยืนยัน)</h2>
+        <table class="data compact">
+          <thead><tr><th>ชื่อ</th>${ORDER.map((m) => `<th style="text-align:center">${METHOD[m]}</th>`).join('')}<th style="text-align:center">รวม</th><th>ครั้งแรก</th><th>ล่าสุด</th></tr></thead>
+          <tbody>${perRows || '<tr><td colspan="10" class="muted">ไม่มีข้อมูล</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      ${multi ? `<div class="panel tbl-wrap"><h2>แยกตามวัน</h2>
+        <table class="data compact"><thead><tr><th>วัน</th>${ORDER.map((m) => `<th style="text-align:center">${METHOD[m]}</th>`).join('')}<th style="text-align:center">รวม</th></tr></thead>
+        <tbody>${dayRows || '<tr><td colspan="8" class="muted">ไม่มีข้อมูล</td></tr>'}</tbody></table></div>` : ''}
+
+      <div class="panel tbl-wrap">
+        <div class="head" style="margin-bottom:8px"><h2 style="margin:0">รายการสแกนทีละครั้ง (${detail.length}${logs.filter((r) => !mf || r.method === mf).length > 300 ? ' จากล่าสุด 300' : ''})</h2>
+          <label class="f">ประเภท<select id="u-m"><option value="">ทุกประเภท</option>${ORDER.map((m) => `<option value="${m}"${m === mf ? ' selected' : ''}>${METHOD[m]}</option>`).join('')}</select></label></div>
+        <table class="data compact">
+          <thead><tr><th>เวลา</th><th>ชื่อ</th><th>ประเภท</th><th>ทิศทาง</th><th>เข้าระบบหลัง</th><th>รายละเอียด</th></tr></thead>
+          <tbody>${detailRows || '<tr><td colspan="6" class="muted">ไม่มีข้อมูล</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      <div class="panel tbl-wrap">
+        <h2>การเข้าใช้งานระบบ</h2>
+        <table class="data compact">
+          <thead><tr><th>ผู้ใช้</th><th style="text-align:center">เข้าสู่ระบบ</th><th style="text-align:center">พิมพ์</th><th style="text-align:center">ดาวน์โหลด</th><th style="text-align:center">ดูบันทึก</th><th>ล่าสุด</th></tr></thead>
+          <tbody>${useRows || '<tr><td colspan="6" class="muted">ไม่มีบันทึกในช่วงนี้</td></tr>'}</tbody>
+        </table>
+        <p class="muted" style="font-size:14px">นับจากบันทึกการใช้งาน (เมนูบันทึกการใช้งาน) · ไม่รวมการสแกนที่เครื่อง</p>
+      </div>`);
+    const go = () => { location.hash = link(document.getElementById('u-f').value || today, document.getElementById('u-t').value || today, document.getElementById('u-m').value); };
+    document.getElementById('u-f').onchange = go;
+    document.getElementById('u-t').onchange = go;
+    document.getElementById('u-m').onchange = go;
   }
 
   // ---------------------------------------------------------------- เจ้าหน้าที่
