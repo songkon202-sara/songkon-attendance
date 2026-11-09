@@ -877,8 +877,11 @@
         : `<span style="color:var(--late)">นอกพื้นที่ · ห่าง ${fmtM(d)}</span>`;
       const t = new Date(p.timestamp || Date.now()).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
       gpsSub.innerHTML = `ความแม่นยำ ±${fmtM(acc)} · อัปเดต ${t} น.` +
-        (acc > 150 ? ' <span class="tag late">สัญญาณยังไม่แม่น รอสักครู่ หรือออกไปที่โล่ง</span>' : '') +
-        (!inside && d - acc <= settings.radius_m ? ' <span class="tag late">ใกล้ขอบเขต ลองกดตรวจตำแหน่งใหม่</span>' : '');
+        (acc > 2000 ? `<br><span class="tag late">เครื่องส่งตำแหน่งแบบคร่าว ๆ</span> ให้เปิด "ตำแหน่งที่แม่นยำ" — ${/iPhone|iPad/i.test(navigator.userAgent)
+            ? 'การตั้งค่า → ความเป็นส่วนตัวและความปลอดภัย → บริการหาตำแหน่ง → เว็บไซต์ Safari → เปิด "ตำแหน่งที่แม่นยำ"'
+            : 'การตั้งค่าเครื่อง → ตำแหน่ง → สิทธิ์ของแอป → Chrome → เปิด "ใช้ตำแหน่งที่แม่นยำ"'} แล้วกดตรวจตำแหน่งใหม่`
+          : acc > 150 ? ' <span class="tag late">สัญญาณยังไม่แม่น รอสักครู่ หรือออกไปที่โล่ง</span>'
+          : !inside && d - acc <= settings.radius_m ? ' <span class="tag late">ใกล้ขอบเขต ลองกดตรวจตำแหน่งใหม่</span>' : '');
       reasonBox.hidden = inside;
       go.disabled = !loadFaceApi.ready;
     };
