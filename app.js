@@ -14,6 +14,7 @@
   const hhmm = (t) => (t ? String(t).slice(0, 5) : '');
   const todayISO = () => new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
   const thaiDate = (iso, opts) => new Date(iso + 'T00:00:00+07:00').toLocaleDateString('th-TH', Object.assign({ timeZone: 'Asia/Bangkok', day: 'numeric', month: 'long', year: 'numeric' }, opts || {}));
+  const logEvent = (action, summary) => { try { sb.rpc('log_event', { p_action: action, p_summary: summary || null }).then(() => {}, () => {}); } catch (e) { /* ไม่สำคัญ */ } };
   const thaiDateTime = (ts) => (ts ? new Date(ts).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' }) : '—');
   const isAdmin = () => state.me && state.me.role === 'admin';
   // ผู้บริหาร (เช่น ผู้อำนวยการ) เห็นข้อมูลทุกคนเหมือนแอดมิน แต่แก้ไขไม่ได้
@@ -42,6 +43,7 @@
   const ROUTES = {
     sheet: { view: true, live: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
     report: { view: true, live: true, title: 'รายงานประจำวัน', admin: true, render: viewReport },
+    audit: { view: true, title: 'บันทึกการใช้งาน', admin: true, render: viewAudit },
     staff: { view: true, title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
     monthly: { view: true, title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
     leave: { view: true, title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
@@ -53,8 +55,8 @@
   };
 
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'settings', 'checkin', 'me']
-      : canView() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'checkin', 'me'] : ['checkin', 'me'];
+    const keys = isAdmin() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'settings', 'audit', 'checkin', 'me']
+      : canView() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'audit', 'checkin', 'me'] : ['checkin', 'me'];
     document.getElementById('nav').innerHTML = keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
   }
@@ -265,7 +267,7 @@
     document.getElementById('day').onchange = (e) => e.target.value && go(e.target.value);
     document.getElementById('prev').onclick = () => shift(-1);
     document.getElementById('next').onclick = () => shift(1);
-    document.getElementById('print').onclick = () => window.print();
+    document.getElementById('print').onclick = () => { logEvent('print', 'ใบบัญชีลงเวลา ' + day); window.print(); };
   }
 
   // ---------------------------------------------------------------- รายงานสรุปประจำวัน (รหัส / ตำแหน่ง / สถานะ)
@@ -350,7 +352,7 @@
     document.getElementById('day').onchange = (e) => e.target.value && go(e.target.value);
     document.getElementById('prev').onclick = () => shift(-1);
     document.getElementById('next').onclick = () => shift(1);
-    document.getElementById('print').onclick = () => window.print();
+    document.getElementById('print').onclick = () => { logEvent('print', 'รายงานประจำวัน ' + day); window.print(); };
     document.getElementById('xlsx').onclick = async () => {
       try {
         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
@@ -359,9 +361,63 @@
         const wb = XLSX.utils.book_new(); const ws = XLSX.utils.json_to_sheet(data);
         ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 28 }, { wch: 30 }, { wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 30 }];
         XLSX.utils.book_append_sheet(wb, ws, 'รายงาน ' + day);
-        XLSX.writeFile(wb, `รายงานลงเวลา-${day}.xlsx`);
+        XLSX.writeFile(wb, `รายงานลงเวลา-${day}.xlsx`); logEvent('export', 'รายงานประจำวัน ' + day + ' (Excel)');
       } catch (e) { fail(e); }
     };
+  }
+
+  // ---------------------------------------------------------------- บันทึกการใช้งาน (Audit Log)
+  const AUDIT_ENTITY = { staff: 'เจ้าหน้าที่', leave: 'ลา / ไปราชการ', attendance: 'การลงเวลา', face: 'ใบหน้า', holiday: 'วันหยุด', settings: 'ตั้งค่า', auth: 'เข้าสู่ระบบ', report: 'พิมพ์ / ดาวน์โหลด' };
+  const AUDIT_ACTION = {
+    'staff:insert': 'เพิ่มเจ้าหน้าที่', 'staff:update': 'แก้ไขเจ้าหน้าที่', 'staff:delete': 'ลบเจ้าหน้าที่',
+    'leave:insert': 'บันทึกลา/ไปราชการ', 'leave:update': 'แก้ไขลา/ไปราชการ', 'leave:delete': 'ลบลา/ไปราชการ',
+    'attendance:insert': 'ลงเวลาผ่านมือถือ', 'attendance:update': 'แก้ไขเวลาที่ลงไว้', 'attendance:delete': 'ลบเวลาที่ลงไว้',
+    'face:insert': 'ลงทะเบียนใบหน้า', 'face:delete': 'ลบใบหน้า', 'face:approve': 'อนุมัติใบหน้า',
+    'holiday:insert': 'เพิ่มวันหยุด', 'holiday:update': 'แก้ไขวันหยุด', 'holiday:delete': 'ลบวันหยุด',
+    'settings:update': 'แก้ไขตั้งค่า', 'auth:login': 'เข้าสู่ระบบ', 'auth:view_audit': 'ดูบันทึกการใช้งาน',
+    'report:print': 'พิมพ์', 'report:export': 'ดาวน์โหลด'
+  };
+  const AUDIT_FIELD = { full_name: 'ชื่อ', position: 'ตำแหน่ง', staff_type: 'ประเภท', role: 'สิทธิ์', is_active: 'ใช้งาน', sort_order: 'ลำดับ',
+    hip_user_id: 'เลขในเครื่องสแกน', emp_code: 'รหัสพนักงาน', on_sheet: 'แสดงในใบบัญชี', auth_user_id: 'บัญชีล็อกอิน', note: 'หมายเหตุ', kind: 'ประเภท',
+    day: 'วันที่', name: 'ชื่อ', work_start: 'เวลาเริ่มงาน', work_end: 'เวลาเลิกงาน', late_grace_min: 'สายเกิน (นาที)', radius_m: 'รัศมี (ม.)',
+    face_threshold: 'ค่าใบหน้า', positions: 'รายการตำแหน่ง', log_time: 'เวลา', staff_id: 'เจ้าหน้าที่', direction: 'มา/กลับ', distance_m: 'ระยะ (ม.)',
+    face_score: 'ความต่างใบหน้า', gps_accuracy_m: 'GPS คลาดเคลื่อน (ม.)' };
+  function auditDetail(e, d) {
+    if (!d || typeof d !== 'object' || d.tx) return '';
+    const v = (x) => x === null || x === undefined || x === '' ? '—' : Array.isArray(x) ? (x.length > 4 ? x.length + ' รายการ' : x.join(', ')) : typeof x === 'boolean' ? (x ? 'ใช่' : 'ไม่') : String(x);
+    const parts = Object.entries(d).filter(([k]) => !['id', 'created_at', 'auth_user_id'].includes(k) || e === 'staff');
+    return parts.filter(([k]) => k !== 'id' && k !== 'created_at').slice(0, 8).map(([k, x]) =>
+      `${esc(AUDIT_FIELD[k] || k)}: ${Array.isArray(x) && x.length === 2 && e !== 'settings' || (Array.isArray(x) && x.length === 2 && !Array.isArray(x[0]) && typeof x[0] !== 'object')
+        ? esc(v(x[0])) + ' → ' + esc(v(x[1])) : esc(v(x))}`).join(' · ');
+  }
+  async function viewAudit() {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const ent = params.get('e') || '', days = Number(params.get('n') || 30);
+    const since = new Date(Date.now() - days * 864e5).toISOString();
+    let qy = sb.from('audit_log').select('at, actor, entity, action, summary, detail').gte('at', since).order('at', { ascending: false }).limit(500);
+    if (ent) qy = qy.eq('entity', ent);
+    const rows = await q(qy);
+    const when = (ts) => new Date(ts).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    setView(`
+      <div class="head"><div><h1>บันทึกการใช้งาน</h1><p class="muted">ใครทำอะไรในระบบ เมื่อไร · แก้ไขหรือลบบันทึกนี้ไม่ได้</p></div>
+        <div class="row">
+          <label class="f">ประเภท<select id="au-e"><option value="">ทุกประเภท</option>${Object.entries(AUDIT_ENTITY).map(([k, t]) => `<option value="${k}"${k === ent ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+          <label class="f">ช่วงเวลา<select id="au-n">${[[7, '7 วัน'], [30, '30 วัน'], [90, '90 วัน'], [365, '1 ปี']].map(([n, t]) => `<option value="${n}"${n === days ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+          <button class="btn quiet" type="button" id="au-reload">โหลดใหม่</button>
+        </div></div>
+      <div class="panel tbl-wrap"><table class="data">
+        <thead><tr><th>วันเวลา</th><th>ผู้ใช้</th><th>การกระทำ / รายละเอียด</th></tr></thead>
+        <tbody>${rows.map((x) => `<tr>
+          <td style="white-space:nowrap" class="muted">${when(x.at)}</td>
+          <td><b>${esc(x.actor)}</b></td>
+          <td><span class="tag${/delete/.test(x.action) ? ' late' : /update|approve/.test(x.action) ? ' away' : ''}">${esc(AUDIT_ACTION[x.entity + ':' + x.action] || x.action)}</span>
+            ${esc(x.summary || '')}<div class="muted" style="font-size:13px">${auditDetail(x.entity, x.detail)}</div></td>
+        </tr>`).join('') || '<tr><td colspan="3" class="muted">ยังไม่มีบันทึกในช่วงนี้</td></tr>'}</tbody>
+      </table>${rows.length === 500 ? '<p class="muted">แสดง 500 รายการล่าสุด — เลือกประเภทหรือช่วงเวลาให้แคบลง</p>' : ''}</div>`);
+    const go = () => { location.hash = `#/audit?e=${document.getElementById('au-e').value}&n=${document.getElementById('au-n').value}`; };
+    document.getElementById('au-e').onchange = go;
+    document.getElementById('au-n').onchange = go;
+    document.getElementById('au-reload').onclick = () => route();
   }
 
   // ---------------------------------------------------------------- เจ้าหน้าที่
@@ -641,7 +697,7 @@
         const ws2 = XLSX.utils.json_to_sheet(det); ws2['!cols'] = [{ wch: 18 }, { wch: 28 }, { wch: 9 }, { wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 6 }, { wch: 12 }, { wch: 36 }];
         XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายเดือน');
         XLSX.utils.book_append_sheet(wb, ws2, 'รายวัน');
-        XLSX.writeFile(wb, `songkon-attendance-${month}.xlsx`);
+        XLSX.writeFile(wb, `songkon-attendance-${month}.xlsx`); logEvent('export', 'สรุปรายเดือน ' + month + ' (Excel)');
         toast('ดาวน์โหลด Excel แล้ว');
       } catch (e) { fail(e); } finally { busy(b, false); }
     };
@@ -1264,6 +1320,7 @@
   sb.auth.onAuthStateChange((event, session) => {
     const uid = session ? session.user.id : null;
     if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT' || (event === 'SIGNED_IN' && uid !== lastUid)) {
+      if (event === 'SIGNED_IN' && lastUid === null) setTimeout(() => logEvent('login'), 0);
       lastUid = uid;
       setTimeout(refresh, 0);
     }
