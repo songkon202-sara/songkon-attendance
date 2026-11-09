@@ -1111,8 +1111,10 @@
     const end = endD.toISOString().slice(0, 7) + '-01T00:00:00+07:00';
     const [logs, settings] = await Promise.all([
       q(sb.from('attendance_logs').select('log_time, method, in_area, reason').eq('staff_id', who.id).gte('log_time', start).lt('log_time', end).order('log_time')),
-      q(sb.from('settings').select('work_start, late_grace_min').eq('id', 1).single())
+      q(sb.from('settings').select('work_start, late_grace_min, workdays').eq('id', 1).single())
     ]);
+    const hol = new Set((await q(sb.from('holidays').select('day').gte('day', start.slice(0, 10)).lt('day', end.slice(0, 10))).catch(() => [])).map((h) => h.day));
+    const isWork = (d) => { const w = new Date(d + 'T12:00:00Z').getUTCDay() || 7; return (settings.workdays || [1, 2, 3, 4, 5]).includes(w) && !hol.has(d); };
     const lateAfter = (() => { const [h, m] = hhmm(settings.work_start).split(':').map(Number); const t = h * 60 + m + settings.late_grace_min; return t; })();
     const byDay = new Map();
     for (const l of logs) {
@@ -1125,7 +1127,7 @@
     const rows = [...byDay.entries()].map(([d, ls]) => {
       const first = ls[0], last = ls.length > 1 ? ls[ls.length - 1] : null;
       const [h, m] = tm(first.log_time).split(':').map(Number);
-      const late = h * 60 + m > lateAfter; if (late) lateCount++;
+      const late = isWork(d) && h * 60 + m > lateAfter; if (late) lateCount++;
       return `<tr><td>${thaiDate(d, { weekday: 'short' })}</td>
         <td>${tm(first.log_time)} <span class="tag none">${METHOD[first.method]}</span> ${late ? '<span class="tag late">สาย</span>' : ''}</td>
         <td>${last ? `${tm(last.log_time)} <span class="tag none">${METHOD[last.method]}</span>` : '<span class="muted">ไม่ได้สแกนกลับ</span>'}</td>
