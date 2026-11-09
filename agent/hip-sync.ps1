@@ -85,6 +85,8 @@ try {
               [Globalization.CultureInfo]::InvariantCulture, 'None', [ref]$p)) { $ts = $p }
       }
       if (-not $ts) { $ts = [datetime]$r.adddate; $modeStr = "$modeStr|BADTIME:$raw" }
+      # เครื่อง/โปรแกรมบางรอบบันทึกปีเป็น พ.ศ. (เช่น 2569) → แปลงเป็น ค.ศ.
+      if ($ts.Year -gt 2400) { $ts = $ts.AddYears(-543) }
       @{ id = [long]$r.id; enroll = [string]$r.enrollnumber
          mode = if ($r.verifymode -is [DBNull]) { $null } else { [long]$r.verifymode }
          mode_str = $modeStr
