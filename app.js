@@ -44,7 +44,7 @@
     sheet: { view: true, live: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
     report: { view: true, live: true, title: 'รายงานประจำวัน', admin: true, render: viewReport },
     usage: { view: true, title: 'ตรวจสอบระบบ', admin: true, render: viewUsage },
-    audit: { view: true, title: 'บันทึกการใช้งาน', admin: true, render: viewAudit },
+    audit: { view: true, title: 'Audit Log', admin: true, render: viewAudit },
     staff: { view: true, title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
     monthly: { view: true, title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
     leave: { view: true, title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
@@ -59,8 +59,9 @@
   const NAV_GROUPS = [
     { id: 'report', title: 'รายงาน', keys: ['sheet', 'report', 'monthly'], extra: [] },
     { id: 'manage', title: 'จัดการ', keys: ['staff', 'leave'], extra: ['face'] },
-    { id: 'check', title: 'ตรวจสอบ', keys: ['usage', 'audit'], extra: ['ready'] },
+    { id: 'check', title: 'ตรวจสอบ', keys: ['usage'], extra: ['ready'] },
     { id: 'me', title: 'ลงเวลา', keys: ['checkin', 'me'], extra: [] },
+    { id: 'audit', title: 'Audit Log', keys: ['audit'], extra: [], icon: true },
     { id: 'settings', title: 'ตั้งค่า', keys: ['settings'], extra: [] }
   ];
   function renderNav(current) {
@@ -68,7 +69,7 @@
     const groups = NAV_GROUPS.map((g) => Object.assign({}, g, { keys: g.keys.filter(ok) })).filter((g) => g.keys.length);
     const cur = groups.find((g) => g.keys.includes(current) || g.extra.includes(current)) || groups[0];
     document.getElementById('nav').innerHTML = groups.map((g) =>
-      `<a href="#/${g.keys[0]}"${g === cur ? ' aria-current="true"' : ''}>${g.title}</a>`).join('');
+      `<a href="#/${g.keys[0]}"${g === cur ? ' aria-current="true"' : ''}>${g.icon ? '<svg class=\"ic\" viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z\"/><path d=\"M14 3v5h5M9 13h6M9 17h6\"/></svg>' : ''}${g.title}</a>`).join('');
     const sub = document.getElementById('subnav');
     sub.innerHTML = cur.keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
@@ -413,7 +414,7 @@
     const rows = await q(qy);
     const when = (ts) => new Date(ts).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
     setView(`
-      <div class="head"><div><h1>บันทึกการใช้งาน</h1><p class="muted">ใครทำอะไรในระบบ เมื่อไร · แก้ไขหรือลบบันทึกนี้ไม่ได้</p></div>
+      <div class="head"><div><h1>Audit Log <small class="muted" style="font-weight:400;font-size:16px">บันทึกการใช้งาน</small></h1><p class="muted">ใครทำอะไรในระบบ เมื่อไร · แก้ไขหรือลบบันทึกนี้ไม่ได้</p></div>
         <div class="row">
           <label class="f">ประเภท<select id="au-e"><option value="">ทุกประเภท</option>${Object.entries(AUDIT_ENTITY).map(([k, t]) => `<option value="${k}"${k === ent ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
           <label class="f">ช่วงเวลา<select id="au-n">${[[7, '7 วัน'], [30, '30 วัน'], [90, '90 วัน'], [365, '1 ปี']].map(([n, t]) => `<option value="${n}"${n === days ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
@@ -597,7 +598,7 @@
           <thead><tr><th>ผู้ใช้</th><th style="text-align:center">เข้าสู่ระบบ</th><th style="text-align:center">พิมพ์</th><th style="text-align:center">ดาวน์โหลด</th><th style="text-align:center">ดูบันทึก</th><th>ล่าสุด</th></tr></thead>
           <tbody>${useRows || '<tr><td colspan="6" class="muted">ไม่มีบันทึกในช่วงนี้</td></tr>'}</tbody>
         </table>
-        <p class="muted" style="font-size:14px">นับจากบันทึกการใช้งาน (เมนูบันทึกการใช้งาน) · ไม่รวมการสแกนที่เครื่อง</p>
+        <p class="muted" style="font-size:14px">นับจากบันทึกการใช้งาน (เมนู Audit Log) · ไม่รวมการสแกนที่เครื่อง</p>
       </div>`);
     const go = () => { location.hash = link(document.getElementById('u-f').value || today, document.getElementById('u-t').value || today, document.getElementById('u-m').value); };
     document.getElementById('u-f').onchange = go;

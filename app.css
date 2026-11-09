@@ -177,3 +177,5 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
 .mob-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 figure.mob { margin: 0; display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
 figure.mob img { width: 96px; height: 72px; object-fit: cover; border-radius: 8px; background: #DDE8E1; flex-shrink: 0; }
+
+#nav a .ic { margin-right: 6px; flex: none; }
