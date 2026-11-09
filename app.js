@@ -41,6 +41,7 @@
   // ---------------------------------------------------------------- routing
   const ROUTES = {
     sheet: { view: true, live: true, title: 'ใบบัญชีลงเวลา', admin: true, render: viewSheet },
+    report: { view: true, live: true, title: 'รายงานประจำวัน', admin: true, render: viewReport },
     staff: { view: true, title: 'เจ้าหน้าที่', admin: true, render: viewStaff },
     monthly: { view: true, title: 'สรุปรายเดือน', admin: true, render: viewMonthly },
     leave: { view: true, title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
@@ -52,8 +53,8 @@
   };
 
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'monthly', 'staff', 'leave', 'settings', 'checkin', 'me']
-      : canView() ? ['sheet', 'monthly', 'staff', 'leave', 'checkin', 'me'] : ['checkin', 'me'];
+    const keys = isAdmin() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'settings', 'checkin', 'me']
+      : canView() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'checkin', 'me'] : ['checkin', 'me'];
     document.getElementById('nav').innerHTML = keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
   }
@@ -265,6 +266,102 @@
     document.getElementById('prev').onclick = () => shift(-1);
     document.getElementById('next').onclick = () => shift(1);
     document.getElementById('print').onclick = () => window.print();
+  }
+
+  // ---------------------------------------------------------------- รายงานสรุปประจำวัน (รหัส / ตำแหน่ง / สถานะ)
+  async function viewReport() {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const day = params.get('d') || todayISO();
+    const [rows, staff, settings, hol] = await Promise.all([
+      q(sb.rpc('daily_sheet', { p_day: day })),
+      q(sb.from('staff').select('id, emp_code, position')),
+      q(sb.from('settings').select('*').eq('id', 1).single()),
+      q(sb.from('holidays').select('day, name').eq('day', day)).catch(() => [])
+    ]);
+    const info = Object.fromEntries(staff.map((x) => [x.id, x]));
+    const wd = new Date(day + 'T12:00:00Z').getUTCDay() || 7;
+    const holiday = hol[0];
+    const workday = (settings.workdays || [1, 2, 3, 4, 5]).includes(wd) && !holiday;
+    const future = day > todayISO();
+    // สถานะ: ไปราชการ / ลา / ปกติ / มาสาย / ไม่ได้ลงเวลากลับ / ขาด / วันหยุด
+    const statusOf = (r) => {
+      if (r.status === 'official') return ['ไปราชการ', 'away'];
+      if (/(^|· )ลา( ·|$)/.test(r.remark || '') && !r.time_in) return ['ลา', 'away'];
+      if (r.time_in) return r.is_late ? ['มาสาย', 'late'] : ['ปกติ', ''];
+      if (!workday) return ['วันหยุด', 'none'];
+      if (future || (day === todayISO())) return ['ยังไม่ลงเวลา', 'none'];
+      return ['ขาด', 'late'];
+    };
+    const noteOf = (r) => (r.remark || '').split(' · ').filter((x) => x && x !== 'ไปราชการ' && x !== 'ลา').join(' · ');
+    const list = rows.map((r) => ({ r, st: statusOf(r), x: info[r.staff_id] || {} }));
+    const count = (k) => list.filter((o) => o.st[0] === k).length;
+    const cell = (t) => t ? hhmm(t) + '\u00a0น.' : '-';
+    const body = list.map(({ r, st, x }, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${esc(x.emp_code || '-')}</td>
+        <td class="name">${esc(r.full_name)}</td>
+        <td class="name">${esc(x.position || '-')}</td>
+        <td class="${r.is_late ? 'is-late' : ''}">${cell(r.time_in)}</td>
+        <td>${cell(r.time_out)}</td>
+        <td><span class="${st[1] ? 'tag ' + st[1] : ''}">${st[0]}</span></td>
+        <td class="note">${esc(noteOf(r))}</td>
+      </tr>`).join('');
+    setView(`
+      <div class="head no-print">
+        <div><h1>รายงานประจำวัน</h1><p class="muted">${thaiDate(day, { weekday: 'long' })}${holiday ? ' · วันหยุด: ' + esc(holiday.name || '') : !workday ? ' · วันหยุด' : ''}</p></div>
+        <div class="row">
+          <label class="f">วันที่<input type="date" id="day" value="${day}"></label>
+          <button class="btn quiet" type="button" id="prev" aria-label="วันก่อนหน้า">‹</button>
+          <button class="btn quiet" type="button" id="next" aria-label="วันถัดไป">›</button>
+          <button class="btn quiet" type="button" id="xlsx">ดาวน์โหลด Excel</button>
+          <button class="btn" type="button" id="print">พิมพ์ / บันทึก PDF</button>
+        </div>
+      </div>
+      <div class="tiles no-print">
+        <div class="tile ok"><b>${count('ปกติ')}</b><span>ปกติ</span></div>
+        <div class="tile late"><b>${count('มาสาย')}</b><span>มาสาย</span></div>
+        <div class="tile away"><b>${count('ไปราชการ') + count('ลา')}</b><span>ไปราชการ / ลา</span></div>
+        <div class="tile"><b>${count('ขาด') + count('ยังไม่ลงเวลา')}</b><span>${day === todayISO() ? 'ยังไม่ลงเวลา' : 'ขาด'}</span></div>
+      </div>
+      <p class="muted no-print" style="font-size:14px">ในหน้าพิมพ์ เลือกปลายทาง "บันทึกเป็น PDF" เพื่อได้ไฟล์ PDF · หน้านี้อัปเดตเองทุก 1 นาที</p>
+      <article class="sheet" aria-label="รายงานสรุปการลงเวลาสำหรับพิมพ์">
+        <div class="sheet-head">
+          <h2>รายงานสรุปการลงเวลาปฏิบัติราชการประจำวัน</h2>
+          <div>ส่วนราชการ: ${esc(settings.site_name)} อำเภอ${esc(settings.district)} จังหวัด${esc(settings.province)}</div>
+          <div>ประจำวันที่ ${thaiDate(day, { weekday: 'long' })}</div>
+        </div>
+        <table class="ledger report">
+          <thead><tr>
+            <th style="width:36px">ลำดับ</th><th style="width:52px">รหัส<br>พนักงาน</th><th>ชื่อ - นามสกุล</th><th>ตำแหน่ง</th>
+            <th style="width:70px">เวลาเข้า</th><th style="width:70px">เวลาออก</th><th style="width:76px">สถานะ</th><th style="width:120px">หมายเหตุ</th>
+          </tr></thead>
+          <tbody>${body || '<tr><td colspan="8">ไม่มีรายชื่อ</td></tr>'}</tbody>
+        </table>
+        <p style="margin-top:10px">สรุป: ทั้งหมด ${list.length} คน · ปกติ ${count('ปกติ')} · มาสาย ${count('มาสาย')} · ไปราชการ ${count('ไปราชการ')} · ลา ${count('ลา')} · ${day === todayISO() ? 'ยังไม่ลงเวลา ' + count('ยังไม่ลงเวลา') : 'ขาด ' + count('ขาด')}${!workday ? ' · (วันหยุด)' : ''}</p>
+        <div class="row" style="justify-content:space-between;margin-top:28px;line-height:1.8;text-align:center">
+          <div style="width:46%">ลงชื่อ ......................................... ผู้รายงาน<br>(.........................................)<br>ตำแหน่ง .........................................</div>
+          <div style="width:46%">ลงชื่อ ......................................... ผู้รับรอง<br>(.........................................)<br>ตำแหน่ง .........................................</div>
+        </div>
+        <div class="sheet-foot">เวลาราชการ ${hhmm(settings.work_start)}–${hhmm(settings.work_end)} น. · นับสายเมื่อมาหลัง ${hhmm(settings.work_start)} เกิน ${settings.late_grace_min} นาที (ไม่นับวันหยุด) · พิมพ์จากระบบเมื่อ ${thaiDateTime(new Date().toISOString())}</div>
+      </article>`);
+    const go = (d) => { location.hash = '#/report?d=' + d; };
+    const shift = (n) => { const t = new Date(day + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + n); go(t.toISOString().slice(0, 10)); };
+    document.getElementById('day').onchange = (e) => e.target.value && go(e.target.value);
+    document.getElementById('prev').onclick = () => shift(-1);
+    document.getElementById('next').onclick = () => shift(1);
+    document.getElementById('print').onclick = () => window.print();
+    document.getElementById('xlsx').onclick = async () => {
+      try {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+        const data = list.map(({ r, st, x }, i) => ({ 'ลำดับ': i + 1, 'รหัสพนักงาน': x.emp_code || '', 'ชื่อ - นามสกุล': r.full_name, 'ตำแหน่ง': x.position || '',
+          'เวลาเข้า': r.time_in ? hhmm(r.time_in) : '', 'เวลาออก': r.time_out ? hhmm(r.time_out) : '', 'สถานะ': st[0], 'หมายเหตุ': noteOf(r) }));
+        const wb = XLSX.utils.book_new(); const ws = XLSX.utils.json_to_sheet(data);
+        ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 28 }, { wch: 30 }, { wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 30 }];
+        XLSX.utils.book_append_sheet(wb, ws, 'รายงาน ' + day);
+        XLSX.writeFile(wb, `รายงานลงเวลา-${day}.xlsx`);
+      } catch (e) { fail(e); }
+    };
   }
 
   // ---------------------------------------------------------------- เจ้าหน้าที่
