@@ -14,7 +14,8 @@ $parts = (Get-Content 'C:\Program Files (x86)\HIP TIME\schcare.ini' -Raw).Trim()
 $cs    = "Server=$($parts[0]);Database=$($parts[1]);User ID=$($parts[2]);Password=$($parts[3]);Connect Timeout=15"
 
 # เลขเก่า -> เลขใหม่ (ตามคน)
-$Map = [ordered]@{ 10 = 1; 7 = 2; 5 = 3; 9 = 4; 1 = 5; 8 = 6; 4 = 8; 2 = 9 }
+# หมายเหตุ: ต้องใช้ hashtable ธรรมดา (ไม่ใช่ [ordered]) ไม่งั้นเลขจะถูกตีความเป็นลำดับตำแหน่ง
+$Map = @{ 10 = 1; 7 = 2; 5 = 3; 9 = 4; 1 = 5; 8 = 6; 4 = 8; 2 = 9 }
 $Off = 100000
 # สแกนดิบ (Transcantime) ตั้งแต่ id นี้ขึ้นไปเป็นเลขชุดใหม่แล้ว ไม่แตะ
 $NewScanFrom = 3071
@@ -47,7 +48,7 @@ try {
     $g = Q $cn "SELECT enrollnumber, COUNT(*) AS n$sel FROM [$t] WHERE $(Scope $t) GROUP BY enrollnumber ORDER BY enrollnumber"
     foreach ($r in $g.Rows) {
       $e = [long]$r.enrollnumber
-      $to = if ($Map.Contains([int]$e)) { $Map[[int]$e] } else { $e + 1000 }
+      $to = if ($Map.ContainsKey([int]$e)) { $Map[[int]$e] } else { $e + 1000 }
       $rng = if ($dateCol) { "  ช่วง [$dateCol] $($r.d1) .. $($r.d2)" } else { '' }
       [void]$sb.AppendLine(("  เลข {0,-6} -> {1,-6} {2,6} แถว{3}" -f $e, $to, $r.n, $rng))
     }
