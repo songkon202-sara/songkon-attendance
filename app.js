@@ -47,7 +47,8 @@
     settings: { title: 'ตั้งค่า', admin: true, render: viewSettings },
     checkin: { title: 'ลงเวลา (มือถือ)', admin: false, render: viewCheckin },
     me: { live: true, title: 'เวลาของฉัน', admin: false, render: viewMe },
-    face: { title: 'ลงทะเบียนใบหน้า', admin: true, render: viewFaceEnroll }
+    face: { title: 'ลงทะเบียนใบหน้า', admin: true, render: viewFaceEnroll },
+    ready: { title: 'ตรวจความพร้อมเครื่อง', admin: false, render: viewReady }
   };
 
   function renderNav(current) {
@@ -809,6 +810,85 @@
     return Math.round(2 * R * Math.asin(Math.sqrt(a)));
   }
 
+  // ตรวจความพร้อมของเครื่องก่อนลงเวลาผ่านมือถือ: เบราว์เซอร์ / ตำแหน่ง (แม่นยำไหม) / กล้อง / ใบหน้า / ตัวตรวจใบหน้า
+  async function viewReady() {
+    const ios = /iPhone|iPad/i.test(navigator.userAgent), android = /Android/i.test(navigator.userAgent);
+    const HOW = {
+      locOff: ios ? 'การตั้งค่า → ความเป็นส่วนตัวและความปลอดภัย → บริการหาตำแหน่ง → เปิด แล้วแตะ "เว็บไซต์ Safari" → เลือก "ขณะใช้แอป"'
+        : android ? 'แตะรูปกุญแจ/ตัวเลือกข้างช่องลิงก์ → สิทธิ์ → ตำแหน่ง → อนุญาต และเปิด "ตำแหน่ง" ที่แถบด่วนด้านบนของเครื่อง'
+        : 'อนุญาตตำแหน่งให้เบราว์เซอร์ (รูปกุญแจข้างช่องลิงก์) และเปิด Location Services ของเครื่อง',
+      precise: ios ? 'การตั้งค่า → ความเป็นส่วนตัวและความปลอดภัย → บริการหาตำแหน่ง → เว็บไซต์ Safari → เปิด "ตำแหน่งที่แม่นยำ"'
+        : android ? 'การตั้งค่าเครื่อง → ตำแหน่ง → สิทธิ์ของแอป → Chrome → เปิด "ใช้ตำแหน่งที่แม่นยำ"'
+        : 'คอมพิวเตอร์ไม่มี GPS ตำแหน่งจึงคลาดเคลื่อนมาก — ให้ลงเวลาด้วยมือถือ',
+      camOff: ios ? 'การตั้งค่า → Safari → กล้อง → อนุญาต (หรือแตะ "aA" ข้างช่องลิงก์ → การตั้งค่าเว็บไซต์ → กล้อง → อนุญาต)'
+        : 'แตะรูปกุญแจข้างช่องลิงก์ → สิทธิ์ → กล้อง → อนุญาต'
+    };
+    const items = [
+      ['browser', 'เบราว์เซอร์รองรับ'], ['loc', 'อนุญาตตำแหน่ง'], ['acc', 'ตำแหน่งแม่นยำ'], ['dist', 'ระยะจาก รพ.สต.'],
+      ['cam', 'อนุญาตกล้อง'], ['face', 'ลงทะเบียนใบหน้าแล้ว'], ['model', 'โหลดตัวตรวจใบหน้า']
+    ];
+    setView(`<div class="checkin">
+      <p><a href="#/checkin">← กลับหน้าลงเวลา</a></p>
+      <h1>ตรวจความพร้อมของเครื่อง</h1>
+      <p class="muted">ตรวจว่ามือถือเครื่องนี้พร้อมลงเวลาหรือยัง ถ้ามีข้อไหนไม่ผ่าน จะบอกวิธีแก้ให้</p>
+      <div class="panel"><ul class="plain" id="ready-list" style="gap:12px">${items.map(([k, t]) =>
+        `<li id="r-${k}"><b><span class="r-ico" aria-hidden="true">⏳</span> ${t}</b><div class="muted r-msg" style="font-size:14px">รอตรวจ…</div></li>`).join('')}</ul></div>
+      <button class="btn big" type="button" id="ready-again">ตรวจอีกครั้ง</button>
+    </div>`);
+    const set = (k, ok, m) => {
+      const li = document.getElementById('r-' + k); if (!li) return;
+      li.querySelector('.r-ico').textContent = ok === true ? '✅' : ok === false ? '❌' : ok === 'warn' ? '⚠️' : '⏳';
+      li.querySelector('.r-msg').innerHTML = m;
+    };
+    const fmtM = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' กม.' : Math.round(m) + ' ม.';
+    async function check() {
+      items.forEach(([k]) => set(k, null, 'กำลังตรวจ…'));
+      // 1) เบราว์เซอร์
+      const hasGeo = !!navigator.geolocation, hasCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      set('browser', hasGeo && hasCam && window.isSecureContext, hasGeo && hasCam ? 'ใช้ได้' : 'เบราว์เซอร์นี้ไม่รองรับ — ใช้ Safari (iPhone) หรือ Chrome (Android)');
+      // 2–4) ตำแหน่ง
+      const settings = await q(sb.from('settings').select('site_lat, site_lng, radius_m').eq('id', 1).single()).catch(() => null);
+      const pos = await new Promise((res) => {
+        if (!hasGeo) return res({ err: { code: 2 } });
+        navigator.geolocation.getCurrentPosition((p) => res({ p }), (e) => res({ err: e }), { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+      });
+      if (pos.err) {
+        const c = pos.err.code;
+        set('loc', false, c === 1 ? 'ยังไม่อนุญาต — ' + HOW.locOff : c === 3 ? 'หาตำแหน่งนานเกินไป — ออกไปใกล้ประตู/หน้าต่าง แล้วกดตรวจอีกครั้ง' : 'หาตำแหน่งไม่ได้ — ' + HOW.locOff);
+        set('acc', false, 'ตรวจไม่ได้ เพราะยังไม่ได้ตำแหน่ง'); set('dist', false, 'ตรวจไม่ได้ เพราะยังไม่ได้ตำแหน่ง');
+      } else {
+        const c = pos.p.coords, acc = Math.round(c.accuracy || 0);
+        set('loc', true, 'อนุญาตแล้ว');
+        if (acc > 2000) set('acc', false, `คลาดเคลื่อน ±${fmtM(acc)} (เครื่องส่งตำแหน่งแบบคร่าว ๆ) — ${HOW.precise}`);
+        else if (acc > 150) set('acc', 'warn', `คลาดเคลื่อน ±${fmtM(acc)} — สัญญาณยังอ่อน ออกไปที่โล่งหรือใกล้หน้าต่าง แล้วกดตรวจอีกครั้ง`);
+        else set('acc', true, `คลาดเคลื่อน ±${fmtM(acc)}`);
+        if (settings && acc > 150) set('dist', 'warn', 'ยังวัดไม่ได้ เพราะตำแหน่งยังไม่แม่น — แก้ข้อ "ตำแหน่งแม่นยำ" ก่อน');
+        else if (settings) {
+          const d = distM(settings.site_lat, settings.site_lng, c.latitude, c.longitude);
+          set('dist', d <= settings.radius_m ? true : 'warn', d <= settings.radius_m ? `ในพื้นที่ · ห่าง ${fmtM(d)}`
+            : `นอกพื้นที่ · ห่าง ${fmtM(d)} (ลงเวลาได้ แต่ต้องเลือกเหตุผล)`);
+        } else set('dist', 'warn', 'อ่านค่าตั้งของ รพ.สต. ไม่ได้');
+      }
+      // 5) กล้อง
+      try {
+        const st = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        st.getTracks().forEach((t) => t.stop());
+        set('cam', true, 'อนุญาตแล้ว');
+      } catch (e) {
+        set('cam', false, /NotAllowed|Permission/i.test(e.name + e.message) ? 'ยังไม่อนุญาต — ' + HOW.camOff : 'เปิดกล้องไม่ได้ (' + esc(e.name || e.message) + ') — ปิดแอปอื่นที่ใช้กล้องอยู่ แล้วกดตรวจอีกครั้ง');
+      }
+      // 6) ใบหน้า
+      const faces = await q(sb.rpc('face_status')).catch(() => []);
+      const mine = faces.find((f) => f.staff_id === state.me.id);
+      set('face', !!(mine && mine.approved), mine && mine.approved ? 'ลงทะเบียนแล้ว' : 'ยังไม่ได้ลงทะเบียน — ให้ผู้ดูแลระบบลงทะเบียนใบหน้าให้ (เมนูเจ้าหน้าที่ → แก้ไข → ลงทะเบียนใบหน้า)');
+      // 7) ตัวตรวจใบหน้า
+      try { await loadFaceApi(() => {}); set('model', true, 'พร้อม'); }
+      catch (e) { set('model', false, 'โหลดไม่สำเร็จ — ตรวจอินเทอร์เน็ต แล้วกดตรวจอีกครั้ง'); }
+    }
+    document.getElementById('ready-again').onclick = check;
+    check();
+  }
+
   async function viewCheckin() {
     const [faces, settings, mine] = await Promise.all([
       q(sb.rpc('face_status')),
@@ -837,6 +917,7 @@
     setView(`
       <div class="checkin">
         <h1>ลงเวลา</h1>
+        <p style="margin:0"><a href="#/ready">เครื่องมีปัญหา? ตรวจความพร้อมของเครื่อง</a></p>
         <p class="muted">${thaiDate(todayISO(), { weekday: 'long' })}</p>
         <div class="seg" role="radiogroup" aria-label="ประเภท">
           <button type="button" role="radio" aria-checked="true" data-dir="in">ลงเวลามา</button>
