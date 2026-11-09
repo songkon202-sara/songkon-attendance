@@ -58,9 +58,10 @@
   // เมนูจัดเป็นหมวด: แถวบนคือหมวด แถวล่างคือหน้าในหมวดที่เปิดอยู่
   const NAV_GROUPS = [
     { id: 'report', title: 'รายงาน', keys: ['sheet', 'report', 'monthly'], extra: [] },
-    { id: 'manage', title: 'จัดการ', keys: ['staff', 'leave', 'settings'], extra: ['face'] },
+    { id: 'manage', title: 'จัดการ', keys: ['staff', 'leave'], extra: ['face'] },
     { id: 'check', title: 'ตรวจสอบ', keys: ['usage', 'audit'], extra: ['ready'] },
-    { id: 'me', title: 'ลงเวลา', keys: ['checkin', 'me'], extra: [] }
+    { id: 'me', title: 'ลงเวลา', keys: ['checkin', 'me'], extra: [] },
+    { id: 'settings', title: 'ตั้งค่า', keys: ['settings'], extra: [] }
   ];
   function renderNav(current) {
     const ok = (k) => { const r = ROUTES[k]; return r && (!r.admin || isAdmin() || (r.view && canView())); };
