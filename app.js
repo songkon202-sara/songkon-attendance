@@ -845,6 +845,8 @@
         <div class="cam"><video id="cam" playsinline muted></video><div class="cam-ring"></div><p id="cam-msg">กำลังเปิดกล้อง…</p></div>
         <div class="panel checks">
           <div><span>ตำแหน่ง</span><b id="gps-msg">กำลังหาตำแหน่ง…</b></div>
+          <div><span class="muted" id="gps-sub" style="font-size:14px"></span>
+            <button class="btn quiet" type="button" id="gps-again" style="min-height:36px;padding:4px 12px;white-space:nowrap;flex-shrink:0">ตรวจตำแหน่งใหม่</button></div>
           <label class="f" id="reason-box" hidden>เหตุผลที่ลงเวลานอกพื้นที่
             <select id="reason"><option value="">— เลือก —</option><option>ไปราชการ / ประชุม</option><option>ออกเยี่ยมบ้าน / ชุมชน</option><option>อบรม</option><option>อื่น ๆ</option></select>
           </label>
@@ -863,19 +865,38 @@
       go.textContent = dir === 'in' ? 'ยืนยันลงเวลามา' : 'ยืนยันลงเวลากลับ';
     });
 
-    // GPS
-    const gpsMsg = document.getElementById('gps-msg'), reasonBox = document.getElementById('reason-box');
-    if (!navigator.geolocation) gpsMsg.textContent = 'เครื่องนี้ไม่รองรับ GPS';
-    else geoWatch = navigator.geolocation.watchPosition((p) => {
+    // GPS — ติดตามตำแหน่งต่อเนื่อง + ปุ่ม "ตรวจตำแหน่งใหม่" (ล้างค่าเดิม ขอพิกัดสดจากเครื่อง)
+    const gpsMsg = document.getElementById('gps-msg'), gpsSub = document.getElementById('gps-sub');
+    const reasonBox = document.getElementById('reason-box'), again = document.getElementById('gps-again');
+    const fmtM = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' กม.' : m + ' ม.';
+    const onPos = (p) => {
       pos = p.coords;
       const d = distM(settings.site_lat, settings.site_lng, pos.latitude, pos.longitude);
-      const inside = d <= settings.radius_m;
-      gpsMsg.innerHTML = inside ? `<span style="color:var(--green)">ในพื้นที่ · ห่าง ${d} ม.</span>`
-        : `<span style="color:var(--late)">นอกพื้นที่ · ห่าง ${d >= 1000 ? (d / 1000).toFixed(1) + ' กม.' : d + ' ม.'}</span>`;
+      const inside = d <= settings.radius_m, acc = Math.round(pos.accuracy || 0);
+      gpsMsg.innerHTML = inside ? `<span style="color:var(--green)">ในพื้นที่ · ห่าง ${fmtM(d)}</span>`
+        : `<span style="color:var(--late)">นอกพื้นที่ · ห่าง ${fmtM(d)}</span>`;
+      const t = new Date(p.timestamp || Date.now()).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
+      gpsSub.innerHTML = `ความแม่นยำ ±${fmtM(acc)} · อัปเดต ${t} น.` +
+        (acc > 150 ? ' <span class="tag late">สัญญาณยังไม่แม่น รอสักครู่ หรือออกไปที่โล่ง</span>' : '') +
+        (!inside && d - acc <= settings.radius_m ? ' <span class="tag late">ใกล้ขอบเขต ลองกดตรวจตำแหน่งใหม่</span>' : '');
       reasonBox.hidden = inside;
       go.disabled = !loadFaceApi.ready;
-    }, (e) => { gpsMsg.textContent = e.code === 1 ? 'ไม่ได้อนุญาตตำแหน่ง — เปิดสิทธิ์ Location ให้เบราว์เซอร์' : 'หาตำแหน่งไม่ได้ ลองออกไปที่โล่ง'; },
-    { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+    };
+    const onErr = (e) => {
+      gpsMsg.textContent = e.code === 1 ? 'ไม่ได้อนุญาตตำแหน่ง — เปิดสิทธิ์ Location ให้เบราว์เซอร์ แล้วกดตรวจตำแหน่งใหม่'
+        : e.code === 3 ? 'หาตำแหน่งนานเกินไป — กดตรวจตำแหน่งใหม่ หรือออกไปที่โล่ง' : 'หาตำแหน่งไม่ได้ — เปิด GPS ของเครื่อง แล้วกดตรวจตำแหน่งใหม่';
+      gpsSub.textContent = '';
+    };
+    const startGps = (fresh) => {
+      if (!navigator.geolocation) { gpsMsg.textContent = 'เครื่องนี้ไม่รองรับ GPS'; return; }
+      if (geoWatch !== null) { navigator.geolocation.clearWatch(geoWatch); geoWatch = null; }
+      if (fresh) { pos = null; go.disabled = true; gpsMsg.textContent = 'กำลังหาตำแหน่ง…'; gpsSub.textContent = ''; }
+      const opt = { enableHighAccuracy: true, maximumAge: fresh ? 0 : 15000, timeout: 20000 };
+      if (fresh) navigator.geolocation.getCurrentPosition(onPos, onErr, opt);
+      geoWatch = navigator.geolocation.watchPosition(onPos, onErr, opt);
+    };
+    again.onclick = () => startGps(true);
+    startGps(false);
 
     // Camera + face model
     const video = document.getElementById('cam');
