@@ -55,11 +55,23 @@
     ready: { title: 'ตรวจความพร้อมเครื่อง', admin: false, render: viewReady }
   };
 
+  // เมนูจัดเป็นหมวด: แถวบนคือหมวด แถวล่างคือหน้าในหมวดที่เปิดอยู่
+  const NAV_GROUPS = [
+    { id: 'report', title: 'รายงาน', keys: ['sheet', 'report', 'monthly'], extra: [] },
+    { id: 'manage', title: 'จัดการ', keys: ['staff', 'leave', 'settings'], extra: ['face'] },
+    { id: 'check', title: 'ตรวจสอบ', keys: ['usage', 'audit'], extra: ['ready'] },
+    { id: 'me', title: 'ลงเวลา', keys: ['checkin', 'me'], extra: [] }
+  ];
   function renderNav(current) {
-    const keys = isAdmin() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'settings', 'usage', 'audit', 'checkin', 'me']
-      : canView() ? ['sheet', 'report', 'monthly', 'staff', 'leave', 'usage', 'audit', 'checkin', 'me'] : ['checkin', 'me'];
-    document.getElementById('nav').innerHTML = keys.map((k) =>
+    const ok = (k) => { const r = ROUTES[k]; return r && (!r.admin || isAdmin() || (r.view && canView())); };
+    const groups = NAV_GROUPS.map((g) => Object.assign({}, g, { keys: g.keys.filter(ok) })).filter((g) => g.keys.length);
+    const cur = groups.find((g) => g.keys.includes(current) || g.extra.includes(current)) || groups[0];
+    document.getElementById('nav').innerHTML = groups.map((g) =>
+      `<a href="#/${g.keys[0]}"${g === cur ? ' aria-current="true"' : ''}>${g.title}</a>`).join('');
+    const sub = document.getElementById('subnav');
+    sub.innerHTML = cur.keys.map((k) =>
       `<a href="#/${k}"${k === current ? ' aria-current="page"' : ''}>${ROUTES[k].title}</a>`).join('');
+    sub.hidden = cur.keys.length < 2;
   }
 
   async function route() {

@@ -37,7 +37,13 @@ p { margin: 0 0 10px; }
 .brand small { font-weight: 400; color: var(--muted); font-size: 13px; }
 #nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
 #nav a { text-decoration: none; color: var(--ink); padding: 8px 12px; border-radius: 999px; min-height: 40px; display: inline-flex; align-items: center; }
-#nav a[aria-current="page"] { background: var(--green-soft); color: var(--green-dark); font-weight: 600; }
+#nav a[aria-current="page"], #nav a[aria-current="true"] { background: var(--green-soft); color: var(--green-dark); font-weight: 600; }
+#nav a { font-weight: 600; }
+.subnav { max-width: 1080px; margin: 0 auto; padding: 0 16px 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.subnav a { text-decoration: none; color: var(--muted); padding: 6px 14px; border-radius: 8px; min-height: 36px; display: inline-flex; align-items: center; font-size: 15px; white-space: nowrap; }
+.subnav a:hover { background: var(--green-soft); color: var(--ink); }
+.subnav a[aria-current="page"] { color: var(--green-dark); font-weight: 600; box-shadow: inset 0 -3px 0 var(--green); border-radius: 8px 8px 0 0; }
+@media (max-width: 760px) { .subnav { flex-wrap: nowrap; overflow-x: auto; } }
 .who { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
 
 /* ---------- layout ---------- */
