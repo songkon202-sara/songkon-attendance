@@ -46,7 +46,8 @@
     leave: { view: true, title: 'ลา / ไปราชการ', admin: true, render: viewLeave },
     settings: { title: 'ตั้งค่า', admin: true, render: viewSettings },
     checkin: { title: 'ลงเวลา (มือถือ)', admin: false, render: viewCheckin },
-    me: { live: true, title: 'เวลาของฉัน', admin: false, render: viewMe }
+    me: { live: true, title: 'เวลาของฉัน', admin: false, render: viewMe },
+    face: { title: 'ลงทะเบียนใบหน้า', admin: true, render: viewFaceEnroll }
   };
 
   function renderNav(current) {
@@ -245,6 +246,8 @@
               ${m.direction === 'out' ? 'กลับ' : 'มา'} ·
               ${m.in_area ? `ในพื้นที่ (${m.distance_m} ม.)` : `<span class="tag away">นอกพื้นที่ ${m.distance_m >= 1000 ? (m.distance_m / 1000).toFixed(1) + ' กม.' : m.distance_m + ' ม.'}</span> ${esc(m.reason || '')}`}
               ${m.face_score != null ? `<br><span class="muted">ความต่างใบหน้า ${Number(m.face_score).toFixed(2)}</span>` : ''}
+              ${m.gps_accuracy_m != null ? `<br><span class="${m.gps_accuracy_m > 100 ? 'tag late' : 'muted'}">GPS คลาดเคลื่อน ~${m.gps_accuracy_m} ม.</span>` : ''}
+              ${m.liveness ? '<br><span class="muted">ผ่านตรวจคนจริง ✓</span>' : ''}
             </figcaption>
           </figure>`).join('')}</div>
       </div>` : ''}`);
@@ -276,6 +279,7 @@
       q(sb.rpc('face_status')).catch(() => [])
     ]);
     const hasFace = new Set(faces.map((f) => f.staff_id));
+    const faceOf = Object.fromEntries(faces.map((f) => [f.staff_id, f]));
     const emailOf = Object.fromEntries(emails.map((e) => [e.staff_id, e.email]));
     const scansOf = Object.fromEntries(counts.map((c) => [c.staff_id, Number(c.scans)]));
     const positions = settings.positions || [];
@@ -289,7 +293,7 @@
     const rowHtml = (s, i) => `
       <tr>
         <td>${i + 1}</td>
-        <td><b>${esc(s.full_name)}</b>${s.on_sheet ? '' : ' <span class="tag none">ไม่แสดงในใบบัญชี</span>'}${hasFace.has(s.id) ? ' <span class="tag" title="ลงทะเบียนใบหน้าสำหรับลงเวลาผ่านมือถือแล้ว">ใบหน้า ✓</span>' : ''}</td>
+        <td><b>${esc(s.full_name)}</b>${s.on_sheet ? '' : ' <span class="tag none">ไม่แสดงในใบบัญชี</span>'}${!hasFace.has(s.id) ? '' : faceOf[s.id].approved ? ' <span class="tag" title="ลงทะเบียนใบหน้าสำหรับลงเวลาผ่านมือถือแล้ว">ใบหน้า ✓</span>' : ' <span class="tag late" title="กด แก้ไข เพื่อดูรูปและอนุมัติ">ใบหน้ารออนุมัติ</span>'}</td>
         <td>${esc(s.position || '—')}</td>
         <td>${esc(TYPE[s.staff_type] || '')}</td>
         <td>${esc(s.emp_code || '—')}</td>
@@ -350,10 +354,13 @@
             <label class="f" style="grid-column:1/-1">บัญชีล็อกอิน<select name="link"></select></label>
             <label class="check" style="grid-column:1/-1"><input type="checkbox" name="on_sheet"> แสดงในใบบัญชีลงเวลา</label>
           </div>
-          <div id="face-row" class="row" style="margin-top:6px" hidden>
-            <span class="muted" style="font-size:14px">ลงทะเบียนใบหน้าแล้ว (ลงเวลาผ่านมือถือ)</span>
-            <button class="btn danger" type="button" id="face-reset">รีเซ็ตใบหน้า</button>
+          <div id="face-row" class="row" style="margin-top:6px;align-items:center" hidden>
+            <img id="face-photo" alt="รูปใบหน้าที่ลงทะเบียน" width="72" height="54" style="border-radius:8px;object-fit:cover;background:#DDE8E1" hidden>
+            <span class="muted" style="font-size:14px" id="face-text">ลงทะเบียนใบหน้าแล้ว (ลงเวลาผ่านมือถือ)</span>
+            <button class="btn" type="button" id="face-approve" hidden>อนุมัติใบหน้า</button>
+            <button class="btn danger" type="button" id="face-reset">ลบใบหน้า</button>
           </div>
+          <div class="row" style="margin-top:6px"><button class="btn quiet" type="button" id="face-enroll" hidden>ลงทะเบียนใบหน้า</button></div>
           <p class="err" id="dlg-err" role="alert"></p>
           <div class="row" style="justify-content:flex-end;margin-top:8px">
             <button class="btn quiet" type="button" id="dlg-cancel">ยกเลิก</button>
@@ -383,14 +390,28 @@
       f.link.innerHTML = (cur ? `<option value="">${esc(cur)} (ผูกอยู่)</option>` : '<option value="">— ไม่ผูกบัญชี —</option>') +
         users.map((u) => `<option value="${u.user_id}">${esc(u.email)}</option>`).join('');
       f.link.disabled = !users.length;
-      document.getElementById('face-row').hidden = !(s && hasFace.has(s.id));
+      const fs = s && faceOf[s.id];
+      document.getElementById('face-row').hidden = !fs;
+      const enr = document.getElementById('face-enroll');
+      enr.hidden = !s; enr.textContent = fs ? 'ลงทะเบียนใบหน้าใหม่ (แทนของเดิม)' : 'ลงทะเบียนใบหน้า';
+      if (fs) {
+        document.getElementById('face-text').textContent = fs.approved ? 'อนุมัติใบหน้าแล้ว' : 'รออนุมัติ — ตรวจว่ารูปเป็นคนนี้จริง';
+        document.getElementById('face-approve').hidden = fs.approved;
+        const img = document.getElementById('face-photo'); img.hidden = true;
+        if (fs.photo_path) sb.storage.from('selfies').createSignedUrl(fs.photo_path, 600).then(({ data }) => { if (data) { img.src = data.signedUrl; img.hidden = false; } });
+      }
       dlg.showModal();
       f.full_name.focus();
     }
     document.getElementById('dlg-cancel').onclick = () => dlg.close();
+    document.getElementById('face-enroll').onclick = () => { if (editing) { dlg.close(); location.hash = '#/face?s=' + editing.id; } };
+    document.getElementById('face-approve').onclick = async () => {
+      if (!editing) return;
+      try { await q(sb.rpc('approve_face', { p_staff_id: editing.id })); dlg.close(); toast('อนุมัติใบหน้าแล้ว'); route(); } catch (e) { fail(e); }
+    };
     document.getElementById('face-reset').onclick = async () => {
-      if (!editing || !confirm(`รีเซ็ตใบหน้าของ "${editing.full_name}"?\nเจ้าหน้าที่ต้องลงทะเบียนใบหน้าใหม่ก่อนลงเวลาผ่านมือถือครั้งถัดไป`)) return;
-      try { await q(sb.rpc('reset_face', { p_staff_id: editing.id })); dlg.close(); toast('รีเซ็ตใบหน้าแล้ว'); route(); } catch (e) { fail(e); }
+      if (!editing || !confirm(`ลบใบหน้าของ "${editing.full_name}"?\nจะลงเวลาผ่านมือถือไม่ได้ จนกว่าผู้ดูแลจะลงทะเบียนใบหน้าให้ใหม่`)) return;
+      try { await q(sb.rpc('reset_face', { p_staff_id: editing.id })); dlg.close(); toast('ลบใบหน้าแล้ว'); route(); } catch (e) { fail(e); }
     };
     f.onsubmit = async (ev) => {
       ev.preventDefault();
@@ -713,22 +734,74 @@
     ]);
     loadFaceApi.ready = true;
   }
-  async function startCamera(video) {
+  async function startCamera(video, facing = 'user') {
     if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
-    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
     video.srcObject = camStream;
     await video.play();
   }
-  async function readFace(video) {
-    const r = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
-      .withFaceLandmarks().withFaceDescriptor();
-    return r ? Array.from(r.descriptor) : null;
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  const faceOpts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  // ค่าจากจุดบนใบหน้า 68 จุด (ภาพจากกล้องแบบไม่กลับด้าน)
+  //  ear = ตาเปิดกว้างแค่ไหน, mar = ปากอ้าแค่ไหน, yaw = จมูกอยู่ตรงไหนระหว่างแนวกราม (0.5 = หน้าตรง; หันไปทางซ้ายของผู้ใช้ → ค่ามากขึ้น)
+  function faceMetrics(lm) {
+    const p = lm.positions, d = (a, b) => Math.hypot(p[a].x - p[b].x, p[a].y - p[b].y);
+    const ear = (i) => (d(i + 1, i + 5) + d(i + 2, i + 4)) / (2 * d(i, i + 3));
+    return { ear: (ear(36) + ear(42)) / 2, mar: d(62, 66) / d(60, 64), yaw: (p[30].x - p[0].x) / (p[16].x - p[0].x) };
   }
-  function snapJpeg(video) {
-    const w = 480, h = Math.round(w * (video.videoHeight || 480) / (video.videoWidth || 640));
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const g = c.getContext('2d'); g.translate(w, 0); g.scale(-1, 1); g.drawImage(video, 0, 0, w, h);
-    return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.7));
+  async function oneFace(input) {
+    const all = await faceapi.detectAllFaces(input, faceOpts()).withFaceLandmarks();
+    if (all.length > 1) throw new Error('พบมากกว่า 1 ใบหน้าในกล้อง — ให้มีคนเดียวในภาพ');
+    return all[0] || null;
+  }
+  // ตรวจว่าเป็นคนจริง: สุ่มท่าทาง 2 ท่า (หันซ้าย/ขวา 1 ท่า + หลับตา/อ้าปาก 1 ท่า) ต้องทำภายในท่าละ 8 วินาที
+  const LIVE = { blink: 'หลับตาสักครู่ แล้วลืมตา', mouth: 'อ้าปากกว้าง', left: 'หันหน้าไปทางซ้ายของคุณ', right: 'หันหน้าไปทางขวาของคุณ' };
+  async function liveness(video, msg, count = 2) {
+    const turn = Math.random() < 0.5 ? 'left' : 'right', act = Math.random() < 0.5 ? 'blink' : 'mouth';
+    const seq = (Math.random() < 0.5 ? [turn, act] : [act, turn]).slice(0, count);
+    msg('มองตรงที่กล้อง');
+    let base = null;
+    for (let i = 0; i < 40 && !base; i++) {
+      const f = await oneFace(video);
+      if (f) { const m = faceMetrics(f.landmarks); if (Math.abs(m.yaw - 0.5) < 0.1) base = m; }
+      if (!base) await sleep(100);
+    }
+    if (!base) throw new Error('ไม่พบใบหน้า — หันหน้าตรง ให้มีแสงพอ แล้วลองอีกครั้ง');
+    for (let i = 0; i < seq.length; i++) {
+      const c = seq[i]; msg(`ท่าที่ ${i + 1}/${seq.length}: ${LIVE[c]}`);
+      const t0 = Date.now(); let done = false, closed = false;
+      while (!done && Date.now() - t0 < 8000) {
+        const f = await oneFace(video);
+        if (f) {
+          const m = faceMetrics(f.landmarks);
+          if (c === 'blink') { if (m.ear < base.ear * 0.7) closed = true; else if (closed && m.ear > base.ear * 0.85) done = true; }
+          if (c === 'mouth') done = m.mar > Math.max(0.35, base.mar + 0.25);
+          if (c === 'left') done = m.yaw > 0.66;
+          if (c === 'right') done = m.yaw < 0.34;
+        }
+        if (!done) await sleep(50);
+      }
+      if (!done) throw new Error(`ไม่ผ่านการตรวจว่าเป็นคนจริง (${LIVE[c]}) — ลองใหม่อีกครั้ง`);
+    }
+    return seq.join('+');
+  }
+  // ถ่ายภาพหน้าตรง 1 เฟรม: ใช้เฟรมเดียวกันทั้งอ่านรหัสใบหน้าและเป็นรูปยืนยัน
+  async function captureFace(video, msg, mirror = true) {
+    msg('มองตรงที่กล้อง');
+    for (let i = 0; i < 30; i++) {
+      const c = document.createElement('canvas'); c.width = video.videoWidth || 640; c.height = video.videoHeight || 480;
+      c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+      const all = await faceapi.detectAllFaces(c, faceOpts()).withFaceLandmarks().withFaceDescriptors();
+      if (all.length > 1) throw new Error('พบมากกว่า 1 ใบหน้าในกล้อง — ให้มีคนเดียวในภาพ');
+      if (all.length === 1 && Math.abs(faceMetrics(all[0].landmarks).yaw - 0.5) < 0.12) {
+        const w = 480, h = Math.round(w * c.height / c.width), o = document.createElement('canvas'); o.width = w; o.height = h;
+        const g = o.getContext('2d'); if (mirror) { g.translate(w, 0); g.scale(-1, 1); } g.drawImage(c, 0, 0, w, h);
+        const blob = await new Promise((res) => o.toBlob(res, 'image/jpeg', 0.7));
+        return { desc: Array.from(all[0].descriptor), blob };
+      }
+      await sleep(120);
+    }
+    throw new Error('ไม่พบใบหน้าตรง — หันหน้าตรง ให้มีแสงพอ แล้วลองอีกครั้ง');
   }
   function distM(lat1, lng1, lat2, lng2) {
     const R = 6371000, rad = (x) => x * Math.PI / 180;
@@ -743,11 +816,23 @@
       q(sb.from('attendance_logs').select('log_time, method, in_area, reason')
         .eq('staff_id', state.me.id).gte('log_time', todayISO() + 'T00:00:00+07:00').order('log_time'))
     ]);
-    const registered = faces.some((f) => f.staff_id === state.me.id);
+    const myFace = faces.find((f) => f.staff_id === state.me.id);
+    const registered = !!myFace;
     const tm = (ts) => new Date(ts).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', hour12: false });
     const todayList = mine.length ? mine.map((l) => `<li>${tm(l.log_time)} · ${METHOD[l.method]}${l.in_area === false ? ' · <span class="tag away">นอกพื้นที่</span>' : ''}</li>`).join('') : '<li class="muted">ยังไม่ได้ลงเวลาวันนี้</li>';
 
-    if (!registered) return viewFaceRegister();
+    if (!registered) {
+      return setView(`<div class="checkin done"><div class="ok-mark" aria-hidden="true" style="background:var(--late)">!</div>
+        <h1>ยังไม่ได้ลงทะเบียนใบหน้า</h1>
+        <p>ให้ผู้ดูแลระบบลงทะเบียนใบหน้าให้ก่อน (เมนูเจ้าหน้าที่ → แก้ไข → ลงทะเบียนใบหน้า) แล้วจึงลงเวลาผ่านมือถือได้</p>
+        <a class="btn quiet" href="#/me">ดูเวลาของฉัน</a></div>`);
+    }
+    if (!myFace.approved) {
+      return setView(`<div class="checkin done"><div class="ok-mark" aria-hidden="true" style="background:var(--late)">⏳</div>
+        <h1>รอผู้ดูแลอนุมัติใบหน้า</h1>
+        <p>ลงทะเบียนใบหน้าแล้ว เมื่อผู้ดูแลระบบอนุมัติ จะลงเวลาผ่านมือถือได้ทันที</p>
+        <a class="btn quiet" href="#/me">ดูเวลาของฉัน</a></div>`);
+    }
 
     setView(`
       <div class="checkin">
@@ -811,21 +896,19 @@
       const d = distM(settings.site_lat, settings.site_lng, pos.latitude, pos.longitude);
       const reason = document.getElementById('reason').value;
       if (d > settings.radius_m && !reason) { err.textContent = 'ลงเวลานอกพื้นที่ ต้องเลือกเหตุผล'; return; }
-      busy(go, true); msg('กำลังตรวจใบหน้า…');
+      if (pos.accuracy > 150) { err.textContent = `สัญญาณ GPS ยังไม่แม่น (คลาดเคลื่อน ~${Math.round(pos.accuracy)} ม.) รอสักครู่หรือออกไปที่โล่ง แล้วลองอีกครั้ง`; return; }
+      busy(go, true);
       try {
-        const desc = await readFace(video);
-        if (!desc) throw new Error('ไม่พบใบหน้า — หันหน้าตรง ให้มีแสงพอ แล้วลองอีกครั้ง');
-        const tpl = await q(sb.from('face_templates').select('descriptor').eq('staff_id', state.me.id));
-        const score = Math.min(...tpl.map((t) => faceapi.euclideanDistance(desc, t.descriptor)));
-        if (!(score <= settings.face_threshold)) throw new Error('ใบหน้าไม่ตรงกับที่ลงทะเบียนไว้ (ค่า ' + score.toFixed(2) + ') ลองอีกครั้ง หรือให้ผู้ดูแลรีเซ็ตใบหน้า');
+        const live = await liveness(video, msg);
+        const { desc, blob } = await captureFace(video, msg);
         msg('กำลังบันทึก…');
-        const blob = await snapJpeg(video);
         const path = `${state.me.id}/${todayISO()}/${Date.now()}-${dir}.jpg`;
         const up = await sb.storage.from('selfies').upload(path, blob, { contentType: 'image/jpeg' });
         if (up.error) throw up.error;
         const rec = await q(sb.rpc('mobile_check_in', {
           p_direction: dir, p_lat: pos.latitude, p_lng: pos.longitude,
-          p_reason: d > settings.radius_m ? reason : null, p_selfie_path: path, p_face_score: Number(score.toFixed(3))
+          p_reason: d > settings.radius_m ? reason : null, p_selfie_path: path,
+          p_descriptor: desc.map((x) => Number(x.toFixed(6))), p_accuracy: pos.accuracy ?? null, p_liveness: live
         }));
         stopCamera();
         setView(`<div class="checkin done"><div class="ok-mark" aria-hidden="true">✓</div>
@@ -839,21 +922,36 @@
     };
   }
 
-  async function viewFaceRegister() {
+  // ผู้ดูแลลงทะเบียนใบหน้าให้เจ้าหน้าที่ (ใช้เป็นแม่แบบเปรียบเทียบตอนลงเวลาผ่านมือถือ)
+  async function viewFaceEnroll() {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const people = await q(sb.from('staff').select('id, full_name').eq('is_active', true).order('sort_order').order('full_name'));
+    const who = people.find((p) => p.id === params.get('s'));
+    if (!who) { location.hash = '#/staff'; return; }
     setView(`
       <div class="checkin">
+        <p><a href="#/staff">← กลับหน้าเจ้าหน้าที่</a></p>
         <h1>ลงทะเบียนใบหน้า</h1>
-        <p class="muted">ทำครั้งเดียว ก่อนเริ่มลงเวลาผ่านมือถือ</p>
+        <p class="muted">${esc(who.full_name)} · ใช้เป็นใบหน้าต้นแบบสำหรับเปรียบเทียบตอนลงเวลาผ่านมือถือ</p>
         <div class="panel" style="background:#FFF8EC;border-color:#EAD3A8">
           <b>การเก็บข้อมูลใบหน้า</b>
-          <p style="margin:6px 0 8px">ระบบเก็บเฉพาะค่าตัวเลขของใบหน้า (ไม่เก็บรูป) เพื่อยืนยันตัวตนตอนลงเวลาเท่านั้น ส่วนรูปถ่ายตอนลงเวลาแต่ละครั้งผู้ดูแลระบบดูได้เพื่อตรวจสอบ ขอลบข้อมูลได้เมื่อพ้นจากหน่วยงาน</p>
-          <label class="check"><input type="checkbox" id="consent"> ข้าพเจ้ายินยอมให้เก็บข้อมูลใบหน้า</label>
+          <p style="margin:6px 0 8px">ระบบเก็บค่าตัวเลขของใบหน้า และรูปหน้าตรง 1 รูป ใช้ยืนยันตัวตนตอนลงเวลาเท่านั้น รูปถ่ายตอนลงเวลาแต่ละครั้งผู้ดูแลระบบดูได้เพื่อตรวจสอบ ขอลบข้อมูลได้เมื่อพ้นจากหน่วยงาน</p>
+          <label class="check"><input type="checkbox" id="consent"> เจ้าหน้าที่ยินยอมให้เก็บข้อมูลใบหน้า</label>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="กล้อง">
+          <button type="button" role="radio" aria-checked="true" data-cam="user">กล้องหน้า</button>
+          <button type="button" role="radio" aria-checked="false" data-cam="environment">กล้องหลัง</button>
         </div>
         <div class="cam" hidden id="cam-wrap"><video id="cam" playsinline muted></video><div class="cam-ring"></div><p id="cam-msg"></p></div>
         <p class="steps" id="steps" hidden></p>
         <button class="btn big" type="button" id="start" disabled>เริ่มถ่ายใบหน้า</button>
         <p class="err" id="rg-err" role="alert"></p>
       </div>`);
+    let facing = 'user';
+    $app.querySelectorAll('[data-cam]').forEach((b) => b.onclick = () => {
+      facing = b.dataset.cam;
+      $app.querySelectorAll('[data-cam]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+    });
     const consent = document.getElementById('consent'), start = document.getElementById('start'), err = document.getElementById('rg-err');
     consent.onchange = () => { start.disabled = !consent.checked; };
     const prompts = ['มองตรงที่กล้อง', 'หันหน้าไปทางซ้ายเล็กน้อย', 'หันหน้าไปทางขวาเล็กน้อย'];
@@ -861,25 +959,37 @@
       err.textContent = ''; busy(start, true);
       const video = document.getElementById('cam'), msg = (t) => { document.getElementById('cam-msg').textContent = t; };
       document.getElementById('cam-wrap').hidden = false;
+      video.style.transform = facing === 'user' ? '' : 'none';
       try {
-        await startCamera(video);
+        await startCamera(video, facing);
         await loadFaceApi(msg);
-        const shots = [];
         const steps = document.getElementById('steps'); steps.hidden = false;
+        steps.textContent = 'ตรวจว่าเป็นคนจริง';
+        await liveness(video, msg);
+        const shots = []; let photo = null;
         for (let i = 0; i < prompts.length; i++) {
           steps.textContent = `ภาพที่ ${i + 1}/3: ${prompts[i]}`;
           msg(prompts[i]);
-          await new Promise((r) => setTimeout(r, 1800));
+          await sleep(1800);
           let d = null;
-          for (let tries = 0; tries < 8 && !d; tries++) { d = await readFace(video); if (!d) await new Promise((r) => setTimeout(r, 400)); }
+          for (let tries = 0; tries < 8 && !d; tries++) {
+            const all = await faceapi.detectAllFaces(video, faceOpts()).withFaceLandmarks().withFaceDescriptors();
+            if (all.length > 1) throw new Error('พบมากกว่า 1 ใบหน้าในกล้อง — ให้มีคนเดียวในภาพ');
+            if (all.length === 1) d = Array.from(all[0].descriptor); else await sleep(400);
+          }
           if (!d) throw new Error('ไม่พบใบหน้าในภาพที่ ' + (i + 1) + ' — ให้มีแสงพอ แล้วกดเริ่มใหม่');
           shots.push(d);
+          if (i === 0) photo = await captureFace(video, msg, facing === 'user');
         }
+        for (const d of shots) if (faceapi.euclideanDistance(d, photo.desc) > 0.6) throw new Error('ภาพแต่ละมุมดูไม่ใช่คนเดียวกัน — กดเริ่มใหม่');
         msg('กำลังบันทึก…');
-        await q(sb.rpc('register_my_face', { p_descriptors: shots }));
+        const ppath = `${who.id}/register/${Date.now()}.jpg`;
+        const up = await sb.storage.from('selfies').upload(ppath, photo.blob, { contentType: 'image/jpeg' });
+        if (up.error) throw up.error;
+        await q(sb.rpc('admin_register_face', { p_staff_id: who.id, p_descriptors: shots.map((d) => d.map((x) => Number(x.toFixed(6)))), p_photo_path: ppath }));
         stopCamera();
-        toast('ลงทะเบียนใบหน้าแล้ว');
-        route();
+        toast('ลงทะเบียนใบหน้าของ ' + who.full_name + ' แล้ว');
+        location.hash = '#/staff';
       } catch (e) { err.textContent = e.message; busy(start, false); }
     };
   }
