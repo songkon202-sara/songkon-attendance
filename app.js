@@ -1015,7 +1015,36 @@
         <p>รับข้อมูลล่าสุด: <b>${thaiDateTime(sync && sync.last_sync_at)}</b></p>
         <p>เวลาสแกนล่าสุดที่รับแล้ว: ${thaiDateTime(sync && sync.last_log_time)} (รายการที่ ${sync ? sync.last_scan_id : 0})</p>
         <p class="muted">ข้อมูลเข้าระบบหลังโปรแกรม HIP Time ดึงข้อมูลจากเครื่องสแกนตามเวลาที่ตั้งไว้ และตัวส่งข้อมูลทำงานทุก 5 นาที</p>
+      </div>
+      <div class="panel">
+        <h2>สำรองข้อมูลระบบ</h2>
+        <p class="muted">ดาวน์โหลดเป็นไฟล์ Excel: เจ้าหน้าที่ ข้อมูลสแกนทั้งหมด การลา วันหยุด และการตั้งค่า</p>
+        <button class="btn quiet" type="button" id="backup-btn">ดาวน์โหลดไฟล์สำรอง</button>
+        <p class="muted" style="font-size:13px;margin-top:8px">ไฟล์มีข้อมูลส่วนบุคคล ควรเก็บในที่ปลอดภัยและไม่ส่งต่อ</p>
       </div>`);
+    document.getElementById('backup-btn').onclick = async (ev) => {
+      const b = ev.target; busy(b, true);
+      try {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+        const wb = XLSX.utils.book_new();
+        const add = (name, rows) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{}]), name);
+        for (const [name, tbl] of [['เจ้าหน้าที่', 'staff'], ['การลา', 'leave_records'], ['วันหยุด', 'holidays'], ['ตั้งค่า', 'settings']]) {
+          const rows = await q(sb.from(tbl).select('*'));
+          add(name, (rows || []).map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, (v && typeof v === 'object') ? JSON.stringify(v) : v]))));
+        }
+        let all = [], from = 0;
+        for (;;) {
+          const part = await q(sb.from('attendance_logs').select('*').order('id').range(from, from + 999));
+          all = all.concat(part || []);
+          if (!part || part.length < 1000) break;
+          from += 1000;
+        }
+        add('ข้อมูลสแกน', all);
+        XLSX.writeFile(wb, 'songkon-backup-' + todayISO() + '.xlsx');
+        logEvent('export', 'สำรองข้อมูลระบบ (Excel)');
+        toast('ดาวน์โหลดไฟล์สำรองแล้ว');
+      } catch (e) { fail(e); } finally { busy(b, false); }
+    };
     document.getElementById('st-form').onsubmit = async (ev) => {
       ev.preventDefault();
       const f = ev.target, btn = f.querySelector('button');
