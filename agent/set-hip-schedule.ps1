@@ -1,4 +1,4 @@
-﻿# ตั้งเวลาให้โปรแกรม HIP Time ดึงข้อมูลจากเครื่องสแกนทุก 15 นาที (07:30–17:30)
+﻿# ตั้งเวลาให้โปรแกรม HIP Time ดึงข้อมูลจากเครื่องสแกนทุก 5 นาที (07:30–17:30)
 # ก่อนรัน: ในโปรแกรม HIP Time > ข้อมูลหลัก > "ตั้งเวลาดึงข้อมูลจากเครื่องบันทึกเวลา"
 #          กด F2 เพิ่มเวลา 07:30 ด้วยมือ 1 รายการก่อน (สคริปต์จะใช้รูปแบบเวลาเดียวกันกับรายการนั้น)
 # วิธีรัน:  powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\SongkonSync\set-hip-schedule.ps1"
@@ -44,7 +44,7 @@ try {
   $have = @{}; foreach ($x in $existing) { $have[(& $norm $x)] = $true }
 
   $added = @()
-  for ($min = 7*60+30; $min -le 17*60+30; $min += 15) {
+  for ($min = 7*60+30; $min -le 17*60+30; $min += 5) {
     if ($have.ContainsKey($min)) { continue }
     $val = Fmt ([math]::Floor($min / 60)) ($min % 60)
     $ins = $cn.CreateCommand()
