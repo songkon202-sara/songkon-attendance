@@ -485,6 +485,8 @@
     const slow = lags.length ? lags[lags.length - 1] : null;
     const lastScan = logs.find((r) => r.method !== 'mobile');
     const sinceSync = sync && sync.last_sync_at ? (Date.now() - new Date(sync.last_sync_at)) / 60000 : null;
+    const seenMin = sync && sync.last_seen_at ? (Date.now() - new Date(sync.last_seen_at)) / 60000 : null;
+    const alive = seenMin == null ? ['ยังไม่มีข้อมูล (รัน SQL 018 แล้วรอ 1–2 นาที)', 'none'] : seenMin <= 5 ? ['ทำงานปกติ', 'ok'] : seenMin <= 20 ? ['ช้ากว่าปกติ', 'away'] : ['เงียบเกิน 20 นาที — ตรวจคอมและ HIP Time', 'late'];
 
     // แยกตามคน
     const per = {};
@@ -564,11 +566,12 @@
 
       <div class="panel">
         <h2>เครื่องสแกนส่งข้อมูลเข้าระบบ</h2>
+        <p>คอมที่ต่อเครื่องสแกน: <span class="tag ${alive[1]}">${alive[0]}</span>${seenMin != null ? ` · ติดต่อล่าสุด ${dur(seenMin)}ที่แล้ว` : ''}</p>
         <p>รับสแกนจากเครื่องล่าสุด <b>${thaiDateTime(sync && sync.last_sync_at)}</b>${sinceSync != null ? ` (${dur(sinceSync)}ที่แล้ว)` : ''} ·
           สแกนล่าสุดจากเครื่อง <b>${lastScan ? thaiDateTime(lastScan.log_time) : '—'}</b>
           ${sync && sync.last_error ? `<br><span class="tag late">ข้อผิดพลาดล่าสุด</span> ${esc(sync.last_error)}` : ''}</p>
         ${lags.length ? `<p>ในช่วงนี้ สแกนจากเครื่อง ${lags.length} ครั้ง เข้าระบบภายใน 2 นาที <b>${fast}%</b> · ช้าสุด ${dur(slow)} · ค่ากลาง ${dur(med)}</p>` : '<p class="muted">ยังไม่มีสแกนจากเครื่องในช่วงนี้</p>'}
-        <p class="muted" style="font-size:14px">เวลา "รับล่าสุด" จะขยับเมื่อมีสแกนใหม่เข้ามาเท่านั้น หากไม่มีใครสแกนจึงไม่ขยับ ถ้ามีคนสแกนแล้วนานเกิน 5 นาทีไม่เข้าระบบ ให้ตรวจโปรแกรม HIP Time (หน้า Real Time) บนคอม</p>
+        <p class="muted" style="font-size:14px">"ติดต่อล่าสุด" ขยับทุกนาทีตราบที่คอมและโปรแกรมส่งข้อมูลทำงานอยู่ แม้ไม่มีใครสแกน ส่วน "รับสแกนล่าสุด" ขยับเมื่อมีสแกนใหม่เท่านั้น ถ้ามีคนสแกนแล้วนานเกิน 5 นาทีไม่เข้าระบบ ให้ตรวจโปรแกรม HIP Time (หน้า Real Time) บนคอม ระบบจะเตือนทาง Telegram เมื่อคอมเงียบเกิน 20 นาทีในเวลาทำการ</p>
       </div>
 
       <div class="panel tbl-wrap">
