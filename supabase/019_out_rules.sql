@@ -5,8 +5,17 @@
 --     สแกนระหว่างวันก่อน 16:30 ที่ไม่ใช่ครั้งแรกจะไม่ถูกนับเป็นเวลากลับ → ขึ้น "ไม่ได้สแกนกลับ" จนกว่าจะสแกนหลัง 16:30
 --     วันหยุด/ไม่ใช่วันทำการ ใช้แบบเดิม (รายการสุดท้ายของวัน)
 --   • สรุปเวรนอกเวลา (Telegram): เวลากลับ = สแกนแรกตั้งแต่ settings.ot_end (18:30) เป็นต้นไป
--- รันใน Supabase SQL Editor ต่อจาก 018 (รันได้ซ้ำ)
+-- รันใน Supabase SQL Editor ต่อจาก 018 (รันได้ซ้ำ; รวมความสามารถของ 015 ไว้แล้ว: ไม่นับมาสายในวันหยุด)
 -- =====================================================================
+
+-- วันทำการ = วันในสัปดาห์ที่อยู่ใน settings.workdays และไม่ใช่วันหยุดในตาราง holidays
+-- (ใส่ไว้ที่นี่ด้วย เพื่อให้ไฟล์นี้รันได้แม้ยังไม่เคยรัน 015; รันซ้ำได้)
+create or replace function is_workday(p_day date) returns boolean
+language sql stable security definer set search_path = public as $$
+  select extract(isodow from p_day)::int = any ((select workdays from settings where id = 1)::int[])
+     and not exists (select 1 from holidays h where h.day = p_day);
+$$;
+grant execute on function is_workday(date) to authenticated;
 
 create or replace function daily_sheet(p_day date)
 returns table (
